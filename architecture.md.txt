@@ -1,0 +1,59 @@
+# InsightQuill - College Feedback System Architecture
+
+## Overview
+A comprehensive college feedback system app with dual interfaces for faculty and students, featuring quiz management, biometric-based attendance tracking, and feedback collection.
+
+## Core Features
+
+### Faculty Interface
+- Login authentication
+- View enrolled students list
+- Quiz management (manual creation or AI-generated via Gemini API)
+- Real-time quiz scheduling (35 minutes after lecture start)
+- Quiz cancellation capability
+- Student performance dashboard
+- Class attendance tracking via biometric data simulation
+
+### Student Interface  
+- Registration number based login
+- Subject-wise quiz access based on timetable
+- Anti-cheat quiz environment (app lock simulation)
+- 5-star rating system for faculty feedback
+- Personal performance tracking
+
+## Technical Architecture
+
+### Data Models
+- User (Faculty/Student)
+- Course & Enrollment
+- Quiz & Question (with image support)
+- QuizSession & Submission
+- Feedback & Rating
+- Timetable & BiometricData
+
+### Screen Structure
+1. **Authentication Flow**: Login selection → Role-based login
+2. **Faculty Flow**: Dashboard → Quiz Management → Performance Analytics
+3. **Student Flow**: Dashboard → Quiz Taking → Feedback Submission → Results
+
+### Key Technical Features
+- Local storage for offline capability
+- Simulated biometric authentication
+- Timer-based quiz auto-start (35 min delay)
+- App lock simulation during quiz
+- Rich question support (text + images)
+- Real-time dashboard updates
+
+### Implementation Approach
+- MVP-focused with 10-12 core files
+- Provider pattern for state management
+- Modular component architecture
+- Material 3 design with custom themes
+- Comprehensive dummy data for demonstration
+
+## Anti-Cheat Measures
+- Simulated app lock during quiz sessions
+- Background app detection warnings
+- Time-based session validation
+- Device orientation lock
+- Fullscreen quiz interface

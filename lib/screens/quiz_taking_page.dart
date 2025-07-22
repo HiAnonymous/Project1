@@ -1,0 +1,541 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'dart:async';
+import 'package:insightquill/providers/app_provider.dart';
+import 'package:insightquill/services/data_service.dart';
+import 'package:insightquill/models/quiz.dart';
+import 'package:insightquill/screens/feedback_page.dart';
+
+class QuizTakingPage extends StatefulWidget {
+  final Quiz quiz;
+
+  const QuizTakingPage({super.key, required this.quiz});
+
+  @override
+  State<QuizTakingPage> createState() => _QuizTakingPageState();
+}
+
+class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObserver {
+  late Timer _timer;
+  late Duration _timeRemaining;
+  int _currentQuestionIndex = 0;
+  Map<String, int> _answers = {};
+  bool _isSubmitting = false;
+  bool _hasLeftApp = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _timeRemaining = Duration(minutes: widget.quiz.duration);
+    _startTimer();
+    _enableKioskMode();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _timer.cancel();
+    _disableKioskMode();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      setState(() => _hasLeftApp = true);
+      _showAntiCheatWarning();
+    }
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_timeRemaining.inSeconds > 0) {
+        setState(() {
+          _timeRemaining -= const Duration(seconds: 1);
+        });
+      } else {
+        _autoSubmitQuiz();
+      }
+    });
+  }
+
+  void _enableKioskMode() {
+    // Simulate enabling kiosk mode
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  }
+
+  void _disableKioskMode() {
+    // Restore normal system UI
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return WillPopScope(
+      onWillPop: () async {
+        _showExitWarning();
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            widget.quiz.title,
+            style: TextStyle(color: theme.colorScheme.onError),
+          ),
+          backgroundColor: theme.colorScheme.error,
+          automaticallyImplyLeading: false,
+          centerTitle: true,
+          actions: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              margin: const EdgeInsets.only(right: 16),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.onError.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.timer,
+                    color: theme.colorScheme.onError,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _formatTime(_timeRemaining),
+                    style: TextStyle(
+                      color: theme.colorScheme.onError,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        body: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                theme.colorScheme.error.withValues(alpha: 0.1),
+                theme.colorScheme.surface,
+              ],
+            ),
+          ),
+          child: Column(
+            children: [
+              _buildQuizHeader(theme),
+              _buildAntiCheatWarning(theme),
+              Expanded(child: _buildQuestionCard(theme)),
+              _buildNavigationControls(theme),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuizHeader(ThemeData theme) {
+    final progress = (_currentQuestionIndex + 1) / widget.quiz.questions.length;
+    
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: theme.colorScheme.surface,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Question ${_currentQuestionIndex + 1} of ${widget.quiz.questions.length}',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                '${_answers.length}/${widget.quiz.questions.length} Answered',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          LinearProgressIndicator(
+            value: progress,
+            backgroundColor: theme.colorScheme.outline.withValues(alpha: 0.2),
+            valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAntiCheatWarning(ThemeData theme) {
+    if (!_hasLeftApp) return const SizedBox();
+    
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      color: theme.colorScheme.errorContainer,
+      child: Row(
+        children: [
+          Icon(
+            Icons.warning,
+            color: theme.colorScheme.onErrorContainer,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Warning: App switching detected. This may be considered cheating.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onErrorContainer,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuestionCard(ThemeData theme) {
+    final question = widget.quiz.questions[_currentQuestionIndex];
+    final selectedAnswer = _answers[question.id];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${_currentQuestionIndex + 1}',
+                          style: TextStyle(
+                            color: theme.colorScheme.onPrimary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        question.text,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              ...question.options.asMap().entries.map((entry) {
+                final optionIndex = entry.key;
+                final optionText = entry.value;
+                final isSelected = selectedAnswer == optionIndex;
+
+                return GestureDetector(
+                  onTap: () => _selectAnswer(question.id, optionIndex),
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: isSelected 
+                          ? theme.colorScheme.primary.withValues(alpha: 0.1)
+                          : theme.colorScheme.surface,
+                      border: Border.all(
+                        color: isSelected 
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.outline.withValues(alpha: 0.3),
+                        width: 2,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: isSelected 
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.surface,
+                            border: Border.all(
+                              color: isSelected 
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.outline,
+                            ),
+                            shape: BoxShape.circle,
+                          ),
+                          child: isSelected 
+                              ? Icon(
+                                  Icons.check,
+                                  size: 16,
+                                  color: theme.colorScheme.onPrimary,
+                                )
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          String.fromCharCode(65 + optionIndex),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: isSelected ? theme.colorScheme.primary : null,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            optionText,
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              color: isSelected ? theme.colorScheme.primary : null,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavigationControls(ThemeData theme) {
+    final isLastQuestion = _currentQuestionIndex == widget.quiz.questions.length - 1;
+    final canSubmit = _answers.length == widget.quiz.questions.length;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        boxShadow: [
+          BoxShadow(
+            color: theme.colorScheme.shadow.withValues(alpha: 0.1),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          if (_currentQuestionIndex > 0)
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => setState(() => _currentQuestionIndex--),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Previous'),
+              ),
+            ),
+          if (_currentQuestionIndex > 0) const SizedBox(width: 16),
+          Expanded(
+            child: ElevatedButton(
+              onPressed: isLastQuestion 
+                ? (canSubmit && !_isSubmitting ? _submitQuiz : null)
+                : () => setState(() => _currentQuestionIndex++),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isLastQuestion 
+                    ? theme.colorScheme.tertiary
+                    : theme.colorScheme.primary,
+                foregroundColor: isLastQuestion 
+                    ? theme.colorScheme.onTertiary
+                    : theme.colorScheme.onPrimary,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: _isSubmitting 
+                ? SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: theme.colorScheme.onTertiary,
+                    ),
+                  )
+                : Text(
+                    isLastQuestion ? 'Submit Quiz' : 'Next',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: isLastQuestion 
+                          ? theme.colorScheme.onTertiary
+                          : theme.colorScheme.onPrimary,
+                    ),
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _selectAnswer(String questionId, int answerIndex) {
+    setState(() {
+      _answers[questionId] = answerIndex;
+    });
+  }
+
+  String _formatTime(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    return '${twoDigits(duration.inMinutes)}:${twoDigits(duration.inSeconds.remainder(60))}';
+  }
+
+  void _submitQuiz() async {
+    if (_isSubmitting) return;
+
+    if (_answers.length < widget.quiz.questions.length) {
+      _showIncompleteQuizDialog();
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    // Calculate score
+    int score = 0;
+    for (final question in widget.quiz.questions) {
+      final userAnswer = _answers[question.id];
+      if (userAnswer == question.correctAnswer) {
+        score++;
+      }
+    }
+
+    // Create submission
+    final submission = QuizSubmission(
+      id: 'sub_${DateTime.now().millisecondsSinceEpoch}',
+      quizId: widget.quiz.id,
+      studentId: Provider.of<AppProvider>(context, listen: false).currentUser!.id,
+      answers: _answers,
+      submittedAt: DateTime.now(),
+      score: score,
+      totalQuestions: widget.quiz.questions.length,
+    );
+
+    // Submit to data service
+    Provider.of<AppProvider>(context, listen: false).submitQuiz(submission);
+
+    // Navigate to feedback page
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FeedbackPage(
+            quiz: widget.quiz,
+            submission: submission,
+          ),
+        ),
+      );
+    }
+  }
+
+  void _autoSubmitQuiz() {
+    _timer.cancel();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Time\'s up! Quiz submitted automatically.')),
+    );
+    _submitQuiz();
+  }
+
+  void _showIncompleteQuizDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Incomplete Quiz'),
+        content: Text('You have answered ${_answers.length} out of ${widget.quiz.questions.length} questions. Do you want to submit anyway?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Continue Quiz'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _submitQuiz();
+            },
+            child: const Text('Submit Anyway'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showExitWarning() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Exit Quiz?'),
+        content: const Text('Are you sure you want to exit? Your progress will be lost and this may be considered as cheating.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Continue Quiz'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pop(context); // Exit quiz
+            },
+            child: const Text('Exit'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAntiCheatWarning() {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Warning: Leaving the app during quiz is not allowed!'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
+  }
+}
