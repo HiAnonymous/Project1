@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:insightquill/providers/app_provider.dart';
-import 'package:insightquill/services/data_service.dart';
+import 'package:insightquill/services/database_service.dart';
 import 'package:insightquill/models/course.dart';
 import 'package:insightquill/models/quiz.dart';
 import 'package:insightquill/models/attendance.dart';
+import 'package:insightquill/models/user.dart';
+import 'package:insightquill/models/timetable.dart';
 import 'package:insightquill/screens/quiz_taking_page.dart';
 
 class StudentDashboard extends StatefulWidget {
@@ -16,7 +18,7 @@ class StudentDashboard extends StatefulWidget {
 }
 
 class _StudentDashboardState extends State<StudentDashboard> {
-  final DataService _dataService = DataService();
+  final DatabaseService _dataService = DatabaseService();
   int _currentIndex = 0;
 
   @override
@@ -72,88 +74,118 @@ class _StudentDashboardState extends State<StudentDashboard> {
   }
 
   Widget _buildOverviewTab(String studentId, ThemeData theme) {
-    final courses = _dataService.getCoursesByStudent(studentId);
-    final activeQuizzes = _dataService.getActiveQuizzesForStudent(studentId);
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _fetchOverviewData(studentId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+        if (!snapshot.hasData || snapshot.data == null) {
+          return const Center(child: Text('No data found.'));
+        }
 
-    return RefreshIndicator(
-      onRefresh: () async {
-        Provider.of<AppProvider>(context, listen: false).refreshQuizzes();
+        final courses = snapshot.data!['courses'] as List<Course>;
+        final activeQuizzes = snapshot.data!['activeQuizzes'] as List<Quiz>;
+
+        return RefreshIndicator(
+          onRefresh: () async {
+            setState(() {});
+          },
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildWelcomeCard(theme),
+                const SizedBox(height: 20),
+                _buildAttendanceStatus(studentId, theme),
+                const SizedBox(height: 20),
+                _buildStatsCards(courses, activeQuizzes, theme),
+                const SizedBox(height: 20),
+                _buildActiveQuizzes(activeQuizzes, studentId, theme),
+                const SizedBox(height: 20),
+                _buildEnrolledCourses(courses, theme),
+              ],
+            ),
+          ),
+        );
       },
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildWelcomeCard(theme),
-            const SizedBox(height: 20),
-            _buildAttendanceStatus(studentId, theme),
-            const SizedBox(height: 20),
-            _buildStatsCards(courses, activeQuizzes, theme),
-            const SizedBox(height: 20),
-            _buildActiveQuizzes(activeQuizzes, theme),
-            const SizedBox(height: 20),
-            _buildEnrolledCourses(courses, theme),
-          ],
-        ),
-      ),
     );
   }
 
+  Future<Map<String, dynamic>> _fetchOverviewData(String studentId) async {
+    final courses = await _dataService.getCoursesByStudent(studentId);
+    final activeQuizzes = await _dataService.getActiveQuizzesForStudent(studentId);
+    return {
+      'courses': courses,
+      'activeQuizzes': activeQuizzes,
+    };
+  }
+
   Widget _buildWelcomeCard(ThemeData theme) {
-    final user = Provider.of<AppProvider>(context).currentUser!;
+    final user = Provider.of<AppProvider>(context, listen: false).currentUser!;
     
-    return Card(
-      elevation: 0,
-      color: theme.colorScheme.primaryContainer,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 30,
-              backgroundColor: theme.colorScheme.primary,
-              child: Text(
-                user.name.split(' ').map((n) => n[0]).take(2).join(),
-                style: TextStyle(
-                  color: theme.colorScheme.onPrimary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Hello,',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
-                    ),
-                  ),
-                  Text(
-                    user.name,
-                    style: theme.textTheme.headlineSmall?.copyWith(
+    return FutureBuilder<Student?>(
+      future: _dataService.getStudentById(user.id),
+      builder: (context, snapshot) {
+        final student = snapshot.data;
+        return Card(
+          elevation: 0,
+          color: theme.colorScheme.primaryContainer,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 30,
+                  backgroundColor: theme.colorScheme.primary,
+                  child: Text(
+                    student != null ? "${student.firstName[0]}${student.lastName[0]}" : "NA",
+                    style: TextStyle(
+                      color: theme.colorScheme.onPrimary,
                       fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.onPrimaryContainer,
+                      fontSize: 18,
                     ),
                   ),
-                  Text(
-                    user.registrationNumber ?? '',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.8),
-                    ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Hello,',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                        ),
+                      ),
+                      Text(
+                        student != null ? "${student.firstName} ${student.lastName}" : "Student",
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                      Text(
+                        user.registrationNumber,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.8),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -230,7 +262,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
     );
   }
 
-  Widget _buildActiveQuizzes(List<Quiz> activeQuizzes, ThemeData theme) {
+  Widget _buildActiveQuizzes(List<Quiz> activeQuizzes, String studentId, ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -276,131 +308,154 @@ class _StudentDashboardState extends State<StudentDashboard> {
             ),
           )
         else
-          ...activeQuizzes.map((quiz) => _buildQuizCard(quiz, theme)),
+          ...activeQuizzes.map((quiz) => _buildQuizCard(quiz, studentId, theme)),
       ],
     );
   }
 
-  Widget _buildQuizCard(Quiz quiz, ThemeData theme) {
-    final course = _dataService.getCourseById(quiz.courseId);
-    final hasSubmitted = _dataService.getSubmissionByStudentAndQuiz(
-      Provider.of<AppProvider>(context).currentUser!.id, 
-      quiz.id,
-    ) != null;
+  Widget _buildQuizCard(Quiz quiz, String studentId, ThemeData theme) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _fetchQuizCardData(quiz, studentId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Card(child: Padding(padding: EdgeInsets.all(16.0), child: Center(child: CircularProgressIndicator())));
+        }
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+        if (!snapshot.hasData || snapshot.data == null) {
+          return const Center(child: Text('No data found.'));
+        }
 
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 12),
-      color: theme.colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: theme.colorScheme.outline.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+        final course = snapshot.data!['course'] as Course?;
+        final hasSubmitted = snapshot.data!['hasSubmitted'] as bool;
+
+        return Card(
+          elevation: 0,
+          margin: const EdgeInsets.only(bottom: 12),
+          color: theme.colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(
+              color: theme.colorScheme.outline.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        quiz.title,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            quiz.quizTitle,
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            course?.name ?? 'Unknown Course',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (hasSubmitted)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.tertiary.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'Completed',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.tertiary,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        course?.name ?? 'Unknown Course',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
-                if (hasSubmitted)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.tertiary.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(12),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.quiz,
+                      size: 16,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '10 questions', // Placeholder
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Icon(
+                      Icons.timer,
+                      size: 16,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '7 minutes', // Placeholder
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: hasSubmitted
+                      ? null
+                      : () => _startQuiz(quiz),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     child: Text(
-                      'Completed',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.tertiary,
+                      hasSubmitted ? 'Already Completed' : 'Start Quiz',
+                      style: TextStyle(
                         fontWeight: FontWeight.bold,
+                        color: hasSubmitted ? theme.colorScheme.onSurface.withValues(alpha: 0.6) : theme.colorScheme.onPrimary,
                       ),
                     ),
                   ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Icon(
-                  Icons.quiz,
-                  size: 16,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '${quiz.questions.length} questions',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Icon(
-                  Icons.timer,
-                  size: 16,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '${quiz.duration} minutes',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: hasSubmitted || !quiz.canStart() 
-                  ? null 
-                  : () => _startQuiz(quiz),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: theme.colorScheme.onPrimary,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  hasSubmitted ? 'Already Completed' : 'Start Quiz',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: hasSubmitted ? theme.colorScheme.onSurface.withValues(alpha: 0.6) : theme.colorScheme.onPrimary,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
+  }
+
+  Future<Map<String, dynamic>> _fetchQuizCardData(Quiz quiz, String studentId) async {
+    final timetables = await _dataService.getTimetableByStudent(studentId);
+    final timetable = timetables.firstWhere((t) => t.id == quiz.timetableId);
+    final course = await _dataService.getCourseById(timetable.courseId);
+    final submission = await _dataService.getSubmissionByStudentAndQuiz(studentId, quiz.id);
+    return {
+      'course': course,
+      'hasSubmitted': submission != null,
+    };
   }
 
   Widget _buildEnrolledCourses(List<Course> courses, ThemeData theme) {
@@ -420,63 +475,65 @@ class _StudentDashboardState extends State<StudentDashboard> {
   }
 
   Widget _buildCourseCard(Course course, ThemeData theme) {
-    final faculty = _dataService.getUserById(course.facultyId);
-
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 8),
-      color: theme.colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: theme.colorScheme.outline.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                Icons.book,
-                color: theme.colorScheme.secondary,
-                size: 20,
-              ),
+    return FutureBuilder<Faculty?>(
+      future: _dataService.getFacultyById(course.facultyId),
+      builder: (context, snapshot) {
+        final faculty = snapshot.data;
+        return Card(
+          elevation: 0,
+          margin: const EdgeInsets.only(bottom: 8),
+          color: theme.colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: theme.colorScheme.outline.withValues(alpha: 0.2),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    course.name,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  Text(
-                    '${course.code} • ${faculty?.name ?? 'Unknown Faculty'}',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                    ),
+                  child: Icon(
+                    Icons.book,
+                    color: theme.colorScheme.secondary,
+                    size: 20,
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        course.name,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        '${course.code} • ${faculty?.firstName ?? ''} ${faculty?.lastName ?? ''}',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildQuizzesTab(String studentId, ThemeData theme) {
-    final activeQuizzes = _dataService.getActiveQuizzesForStudent(studentId);
-
     return Column(
       children: [
         Padding(
@@ -499,8 +556,17 @@ class _StudentDashboardState extends State<StudentDashboard> {
           ),
         ),
         Expanded(
-          child: activeQuizzes.isEmpty
-              ? Center(
+          child: FutureBuilder<List<Quiz>>(
+            future: _dataService.getActiveQuizzesForStudent(studentId),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return Center(child: Text('Error: ${snapshot.error}'));
+              }
+              if (!snapshot.hasData || snapshot.data == null || snapshot.data!.isEmpty) {
+                return Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -526,24 +592,28 @@ class _StudentDashboardState extends State<StudentDashboard> {
                       ),
                     ],
                   ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: activeQuizzes.length,
-                  itemBuilder: (context, index) {
-                    final quiz = activeQuizzes[index];
-                    return _buildQuizCard(quiz, theme);
-                  },
-                ),
+                );
+              }
+
+              final activeQuizzes = snapshot.data!;
+              return ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: activeQuizzes.length,
+                itemBuilder: (context, index) {
+                  final quiz = activeQuizzes[index];
+                  return _buildQuizCard(quiz, studentId, theme);
+                },
+              );
+            },
+          ),
         ),
       ],
     );
   }
 
   Widget _buildTimetableTab(String studentId, ThemeData theme) {
-    final timetables = _dataService.getTimetableByStudent(studentId);
-
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.all(16),
@@ -555,12 +625,28 @@ class _StudentDashboardState extends State<StudentDashboard> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: timetables.length,
-            itemBuilder: (context, index) {
-              final timetable = timetables[index];
-              return _buildTimetableCard(timetable, theme);
+          child: FutureBuilder<List<Timetable>>(
+            future: _dataService.getTimetableByStudent(studentId),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return Center(child: Text('Error: ${snapshot.error}'));
+              }
+              if (!snapshot.hasData || snapshot.data == null || snapshot.data!.isEmpty) {
+                return const Center(child: Text('No timetable found.'));
+              }
+
+              final timetables = snapshot.data!;
+              return ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: timetables.length,
+                itemBuilder: (context, index) {
+                  final timetable = timetables[index];
+                  return _buildTimetableCard(timetable, theme);
+                },
+              );
             },
           ),
         ),
@@ -680,162 +766,179 @@ class _StudentDashboardState extends State<StudentDashboard> {
   }
 
   Widget _buildAttendanceStatus(String studentId, ThemeData theme) {
-    final courses = _dataService.getCoursesByStudent(studentId);
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Today\'s Attendance',
-          style: theme.textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
-        ...courses.map((course) {
-          final attendanceRecord = _dataService.getAttendanceRecord(studentId, course.id);
-          return _buildAttendanceCard(course, attendanceRecord, theme);
-        }).toList(),
-      ],
+    return FutureBuilder<List<Course>>(
+      future: _dataService.getCoursesByStudent(studentId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+        if (!snapshot.hasData || snapshot.data == null || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No courses found.'));
+        }
+
+        final courses = snapshot.data!;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Today\'s Attendance',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ...courses.map((course) {
+              return _buildAttendanceCard(course, null, theme);
+            }).toList(),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildAttendanceCard(Course course, AttendanceRecord? attendance, ThemeData theme) {
-    final faculty = _dataService.getUserById(course.facultyId);
-    
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 8),
-      color: theme.colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: theme.colorScheme.outline.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+  Widget _buildAttendanceCard(Course course, Attendance? attendance, ThemeData theme) {
+    return FutureBuilder<Faculty?>(
+      future: _dataService.getFacultyById(course.facultyId),
+      builder: (context, snapshot) {
+        final faculty = snapshot.data;
+        return Card(
+          elevation: 0,
+          margin: const EdgeInsets.only(bottom: 8),
+          color: theme.colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: theme.colorScheme.outline.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        course.name,
-                        style: theme.textTheme.titleMedium?.copyWith(
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            course.name,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            '${course.code} • ${faculty?.firstName ?? ''} ${faculty?.lastName ?? ''}',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: (attendance?.status == 'present')
+                            ? theme.colorScheme.tertiary.withValues(alpha: 0.2)
+                            : (attendance != null)
+                                ? theme.colorScheme.error.withValues(alpha: 0.2)
+                                : theme.colorScheme.onSurface.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        (attendance?.status == 'present')
+                            ? 'Present'
+                            : (attendance != null)
+                                ? 'Absent'
+                                : 'Not Started',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: (attendance?.status == 'present')
+                              ? theme.colorScheme.tertiary
+                              : (attendance != null)
+                                  ? theme.colorScheme.error
+                                  : theme.colorScheme.onSurface.withValues(alpha: 0.6),
                           fontWeight: FontWeight.bold,
                         ),
                       ),
+                    ),
+                  ],
+                ),
+                if (attendance != null) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.access_time,
+                        size: 16,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                      const SizedBox(width: 4),
                       Text(
-                        '${course.code} • ${faculty?.name ?? 'Unknown Faculty'}',
+                        'Marked at: ${DateFormat.jm().format(attendance.markedAt)}',
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: (attendance?.isPresent ?? false)
-                        ? theme.colorScheme.tertiary.withValues(alpha: 0.2)
-                        : (attendance != null)
-                            ? theme.colorScheme.error.withValues(alpha: 0.2)
-                            : theme.colorScheme.onSurface.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Text(
-                    (attendance?.isPresent ?? false) 
-                        ? 'Present' 
-                        : (attendance != null) 
-                            ? 'Absent' 
-                            : 'Not Started',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: (attendance?.isPresent ?? false)
-                          ? theme.colorScheme.tertiary
-                          : (attendance != null)
-                              ? theme.colorScheme.error
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (attendance != null) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(
-                    Icons.access_time,
-                    size: 16,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Time in class: ${attendance.minutesAttended} minutes',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Icon(
-                    attendance.isEligibleForQuiz ? Icons.check_circle : Icons.cancel,
-                    size: 16,
-                    color: attendance.isEligibleForQuiz 
-                        ? theme.colorScheme.tertiary 
-                        : theme.colorScheme.error,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    attendance.isEligibleForQuiz ? 'Quiz eligible' : 'Quiz not eligible',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: attendance.isEligibleForQuiz 
-                          ? theme.colorScheme.tertiary 
-                          : theme.colorScheme.error,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-              if (!attendance.isEligibleForQuiz) ...[
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.errorContainer.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
+                      const SizedBox(width: 16),
                       Icon(
-                        Icons.info_outline,
+                        attendance.biometricVerified ? Icons.check_circle : Icons.cancel,
                         size: 16,
-                        color: theme.colorScheme.onErrorContainer,
+                        color: attendance.biometricVerified
+                            ? theme.colorScheme.tertiary
+                            : theme.colorScheme.error,
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'You need to be present in class for at least 30 minutes to be eligible for quizzes.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onErrorContainer,
-                          ),
+                      const SizedBox(width: 4),
+                      Text(
+                        attendance.biometricVerified ? 'Quiz eligible' : 'Quiz not eligible',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: attendance.biometricVerified
+                              ? theme.colorScheme.tertiary
+                              : theme.colorScheme.error,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
-                ),
+                  if (!attendance.biometricVerified) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.errorContainer.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: theme.colorScheme.onErrorContainer,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'You need to be marked present via biometrics to be eligible for quizzes.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onErrorContainer,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ],
-            ],
-          ],
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 

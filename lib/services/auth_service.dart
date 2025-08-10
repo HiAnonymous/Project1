@@ -1,26 +1,36 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:insightquill/models/user.dart';
-import 'package:insightquill/services/data_service.dart';
+import 'package:insightquill/services/database_service.dart';
 
 class AuthService {
   static final AuthService _instance = AuthService._internal();
   factory AuthService() => _instance;
   AuthService._internal();
 
-  final DataService _dataService = DataService();
+  final DatabaseService _databaseService = DatabaseService();
   User? _currentUser;
 
   User? get currentUser => _currentUser;
   bool get isLoggedIn => _currentUser != null;
 
   Future<bool> login(String identifier, UserRole role) async {
-    final user = _dataService.authenticate(identifier, role);
-    if (user != null) {
-      _currentUser = user;
-      await _saveUserSession(user);
-      return true;
+    try {
+      print('AuthService: Attempting login for $identifier with role $role');
+      final user = await _databaseService.authenticate(identifier, role);
+      if (user != null) {
+        print('AuthService: User authenticated successfully: ${user.registrationNumber}');
+        _currentUser = user;
+        await _saveUserSession(user);
+        print('AuthService: User session saved');
+        return true;
+      } else {
+        print('AuthService: Authentication failed');
+        return false;
+      }
+    } catch (e) {
+      print('AuthService: Login error: $e');
+      return false;
     }
-    return false;
   }
 
   Future<void> logout() async {
@@ -41,11 +51,15 @@ class AuthService {
   }
 
   Future<void> loadUserSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('user_id');
-    
-    if (userId != null) {
-      _currentUser = _dataService.getUserById(userId);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getString('user_id');
+      
+      if (userId != null) {
+        _currentUser = await _databaseService.getUserById(userId);
+      }
+    } catch (e) {
+      print('Load user session error: $e');
     }
   }
 }

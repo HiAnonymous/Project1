@@ -1,88 +1,78 @@
-class AttendanceRecord {
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+class BiometricData {
   final String id;
   final String studentId;
-  final String courseId;
-  final DateTime classStartTime;
-  final DateTime? checkInTime;
-  final DateTime? checkOutTime;
-  final bool isPresent;
-  final int minutesAttended;
-  final bool isEligibleForQuiz;
+  final String biometricHash;
+  final String registeredDevice;
+  final DateTime addedOn;
 
-  AttendanceRecord({
+  BiometricData({
     required this.id,
     required this.studentId,
-    required this.courseId,
-    required this.classStartTime,
-    this.checkInTime,
-    this.checkOutTime,
-    required this.isPresent,
-    required this.minutesAttended,
-    required this.isEligibleForQuiz,
+    required this.biometricHash,
+    required this.registeredDevice,
+    required this.addedOn,
   });
+
+  factory BiometricData.fromJson(Map<String, dynamic> json) {
+    return BiometricData(
+      id: json['id'],
+      studentId: json['student_id'],
+      biometricHash: json['biometric_hash'],
+      registeredDevice: json['registered_device'],
+      addedOn: (json['added_on'] as Timestamp).toDate(),
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
-        'studentId': studentId,
-        'courseId': courseId,
-        'classStartTime': classStartTime.toIso8601String(),
-        'checkInTime': checkInTime?.toIso8601String(),
-        'checkOutTime': checkOutTime?.toIso8601String(),
-        'isPresent': isPresent,
-        'minutesAttended': minutesAttended,
-        'isEligibleForQuiz': isEligibleForQuiz,
+        'student_id': studentId,
+        'biometric_hash': biometricHash,
+        'registered_device': registeredDevice,
+        'added_on': addedOn,
       };
-
-  factory AttendanceRecord.fromJson(Map<String, dynamic> json) => AttendanceRecord(
-        id: json['id'],
-        studentId: json['studentId'],
-        courseId: json['courseId'],
-        classStartTime: DateTime.parse(json['classStartTime']),
-        checkInTime: json['checkInTime'] != null ? DateTime.parse(json['checkInTime']) : null,
-        checkOutTime: json['checkOutTime'] != null ? DateTime.parse(json['checkOutTime']) : null,
-        isPresent: json['isPresent'],
-        minutesAttended: json['minutesAttended'],
-        isEligibleForQuiz: json['isEligibleForQuiz'],
-      );
-
-  // Copy method for updating records
-  AttendanceRecord copyWith({
-    String? id,
-    String? studentId,
-    String? courseId,
-    DateTime? classStartTime,
-    DateTime? checkInTime,
-    DateTime? checkOutTime,
-    bool? isPresent,
-    int? minutesAttended,
-    bool? isEligibleForQuiz,
-  }) {
-    return AttendanceRecord(
-      id: id ?? this.id,
-      studentId: studentId ?? this.studentId,
-      courseId: courseId ?? this.courseId,
-      classStartTime: classStartTime ?? this.classStartTime,
-      checkInTime: checkInTime ?? this.checkInTime,
-      checkOutTime: checkOutTime ?? this.checkOutTime,
-      isPresent: isPresent ?? this.isPresent,
-      minutesAttended: minutesAttended ?? this.minutesAttended,
-      isEligibleForQuiz: isEligibleForQuiz ?? this.isEligibleForQuiz,
-    );
-  }
 }
 
-class AttendanceSummary {
-  final String courseId;
-  final int totalStudents;
-  final int presentStudents;
-  final int eligibleForQuiz;
-  final List<AttendanceRecord> records;
+class Attendance {
+  final String id;
+  final String studentId;
+  final String timetableId;
+  final DateTime attendanceDate;
+  final String status;
+  final bool biometricVerified;
+  final DateTime markedAt;
 
-  AttendanceSummary({
-    required this.courseId,
-    required this.totalStudents,
-    required this.presentStudents,
-    required this.eligibleForQuiz,
-    required this.records,
+  Attendance({
+    required this.id,
+    required this.studentId,
+    required this.timetableId,
+    required this.attendanceDate,
+    required this.status,
+    required this.biometricVerified,
+    required this.markedAt,
   });
+
+  factory Attendance.fromJson(Map<String, dynamic> json) {
+    return Attendance(
+      id: json['id'],
+      studentId: json['student_id'],
+      timetableId: json['timetable_id'],
+      attendanceDate: (json['attendance_date'] as Timestamp).toDate(),
+      status: json['status'],
+      biometricVerified: json['biometric_verified'],
+      markedAt: (json['marked_at'] as Timestamp).toDate(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'student_id': studentId,
+        'timetable_id': timetableId,
+        'attendance_date': attendanceDate,
+        'status': status,
+        'biometric_verified': biometricVerified,
+        'marked_at': markedAt,
+      };
 }

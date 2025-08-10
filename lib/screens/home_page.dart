@@ -26,7 +26,11 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Consumer<AppProvider>(
       builder: (context, appProvider, child) {
+        print('HomePage: Building with isLoading: ${appProvider.isLoading}, isLoggedIn: ${appProvider.isLoggedIn}');
+        print('HomePage: Current user: ${appProvider.currentUser?.registrationNumber}, role: ${appProvider.currentUser?.role}');
+        
         if (appProvider.isLoading) {
+          print('HomePage: Showing loading screen');
           return const Scaffold(
             body: Center(
               child: CircularProgressIndicator(),
@@ -35,12 +39,15 @@ class _HomePageState extends State<HomePage> {
         }
 
         if (!appProvider.isLoggedIn) {
+          print('HomePage: User not logged in, showing login page');
           return const LoginPage();
         }
 
         if (appProvider.currentUser?.role == UserRole.faculty) {
+          print('HomePage: User is faculty, showing faculty dashboard');
           return const FacultyDashboard();
         } else {
+          print('HomePage: User is student, showing student dashboard');
           return const StudentDashboard();
         }
       },

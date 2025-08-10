@@ -1,3 +1,6 @@
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 class Feedback {
   final String id;
   final String studentId;
@@ -19,23 +22,65 @@ class Feedback {
 
   Map<String, dynamic> toJson() => {
     'id': id,
-    'studentId': studentId,
-    'facultyId': facultyId,
-    'courseId': courseId,
+    'student_id': studentId,
+    'faculty_id': facultyId,
+    'course_id': courseId,
     'rating': rating,
     'comment': comment,
-    'submittedAt': submittedAt.toIso8601String(),
+    'submitted_at': submittedAt.toIso8601String(),
   };
 
   factory Feedback.fromJson(Map<String, dynamic> json) => Feedback(
     id: json['id'],
-    studentId: json['studentId'],
-    facultyId: json['facultyId'],
-    courseId: json['courseId'],
+    studentId: json['student_id'],
+    facultyId: json['faculty_id'],
+    courseId: json['course_id'],
     rating: json['rating'],
     comment: json['comment'],
-    submittedAt: DateTime.parse(json['submittedAt']),
+    submittedAt: json['submitted_at'] is Timestamp 
+      ? (json['submitted_at'] as Timestamp).toDate()
+      : DateTime.parse(json['submitted_at']),
   );
+}
+
+class LectureFeedback {
+  final String id;
+  final String studentId;
+  final String sessionId;
+  final int rating;
+  final String comments;
+  final DateTime submittedAt;
+
+  LectureFeedback({
+    required this.id,
+    required this.studentId,
+    required this.sessionId,
+    required this.rating,
+    required this.comments,
+    required this.submittedAt,
+  });
+
+  factory LectureFeedback.fromJson(Map<String, dynamic> json) {
+    return LectureFeedback(
+      id: json['id'],
+      studentId: json['student_id'],
+      sessionId: json['session_id'],
+      rating: json['rating'],
+      comments: json['comments'],
+      submittedAt: json['submitted_at'] is Timestamp 
+        ? (json['submitted_at'] as Timestamp).toDate()
+        : DateTime.parse(json['submitted_at']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'student_id': studentId,
+        'session_id': sessionId,
+        'rating': rating,
+        'comments': comments,
+        'submitted_at': submittedAt,
+      };
 }
 
 class FeedbackSummary {

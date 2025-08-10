@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:insightquill/providers/app_provider.dart';
-import 'package:insightquill/services/data_service.dart';
+import 'package:insightquill/services/database_service.dart';
 import 'package:insightquill/models/course.dart';
 import 'package:insightquill/models/quiz.dart';
+import 'package:insightquill/models/question.dart';
+// Attendance upload removed from this screen
+
 
 class QuizCreationPage extends StatefulWidget {
   const QuizCreationPage({super.key});
@@ -15,11 +18,13 @@ class QuizCreationPage extends StatefulWidget {
 class _QuizCreationPageState extends State<QuizCreationPage> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
-  final DataService _dataService = DataService();
+  final DatabaseService _dataService = DatabaseService();
   
-  Course? _selectedCourse;
+  String? _selectedCourseId;
+  String? _selectedCourseLabel;
   List<Question> _questions = [];
   int _currentStep = 0;
+  // Attendance upload removed from quiz flow; handled at course level
 
   @override
   void dispose() {
@@ -98,9 +103,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
             ),
           const SizedBox(width: 8),
           ElevatedButton(
-            onPressed: _canProceedToNextStep(details.stepIndex) 
-                ? details.onStepContinue 
-                : null,
+            onPressed: details.onStepContinue,
             style: ElevatedButton.styleFrom(
               backgroundColor: theme.colorScheme.primary,
               foregroundColor: theme.colorScheme.onPrimary,
@@ -117,7 +120,6 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
 
   Widget _buildQuizDetailsStep(ThemeData theme) {
     final user = Provider.of<AppProvider>(context).currentUser!;
-    final courses = _dataService.getCoursesByFaculty(user.id);
 
     return Form(
       key: _formKey,
@@ -134,7 +136,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                 color: theme.colorScheme.primary,
               ),
               filled: true,
-              fillColor: theme.colorScheme.primaryContainer.withValues(alpha: 0.1),
+              fillColor: theme.colorScheme.primaryContainer.withAlpha(25),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide.none,
@@ -148,37 +150,66 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
             },
           ),
           const SizedBox(height: 16),
-          DropdownButtonFormField<Course>(
-            value: _selectedCourse,
-            decoration: InputDecoration(
-              labelText: 'Select Course',
-              prefixIcon: Icon(
-                Icons.book,
-                color: theme.colorScheme.primary,
-              ),
-              filled: true,
-              fillColor: theme.colorScheme.primaryContainer.withValues(alpha: 0.1),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            ),
-            items: courses.map((course) => DropdownMenuItem(
-              value: course,
-              child: Text('${course.name} (${course.code})'),
-            )).toList(),
-            onChanged: (course) => setState(() => _selectedCourse = course),
-            validator: (value) {
-              if (value == null) {
-                return 'Please select a course';
+          FutureBuilder<List<Course>>(
+            future: () async {
+              final faculty = await _dataService.getFacultyByUserId(user.id);
+              if (faculty == null) return <Course>[];
+              return _dataService.getCoursesByFaculty(faculty.id);
+            }(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
               }
-              return null;
+              if (snapshot.hasError) {
+                return Center(child: Text('Error: ${snapshot.error}'));
+              }
+              if (!snapshot.hasData || snapshot.data == null || snapshot.data!.isEmpty) {
+                return const Center(child: Text('No courses found.'));
+              }
+
+              final courses = snapshot.data!;
+              final safeSelectedId = courses.any((c) => c.id == _selectedCourseId) ? _selectedCourseId : null;
+              return DropdownButtonFormField<String>(
+                value: safeSelectedId,
+                decoration: InputDecoration(
+                  labelText: 'Select Course',
+                  prefixIcon: Icon(
+                    Icons.book,
+                    color: theme.colorScheme.primary,
+                  ),
+                  filled: true,
+                  fillColor: theme.colorScheme.primaryContainer.withAlpha(25),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                items: courses
+                    .map((course) => DropdownMenuItem<String>(
+                          value: course.id,
+                          child: Text('${course.name} (${course.code})'),
+                        ))
+                    .toList(),
+                onChanged: (courseId) {
+                  setState(() {
+                    _selectedCourseId = courseId;
+                    final selected = courses.firstWhere((c) => c.id == courseId);
+                    _selectedCourseLabel = '${selected.name} (${selected.code})';
+                  });
+                },
+                validator: (value) {
+                  if (value == null) {
+                    return 'Please select a course';
+                  }
+                  return null;
+                },
+              );
             },
           ),
           const SizedBox(height: 16),
           Card(
             elevation: 0,
-            color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.3),
+            color: theme.colorScheme.secondaryContainer.withAlpha(75),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -205,7 +236,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                   Text(
                     '• Quiz will have exactly 5 questions\n• Duration: 7 minutes\n• Auto-starts 35 minutes after class begins\n• Only available to present students',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                      color: theme.colorScheme.onSurface.withAlpha(175),
                     ),
                   ),
                 ],
@@ -221,6 +252,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Attendance upload removed; questions UI starts here
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -258,13 +290,13 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                     Icon(
                       Icons.quiz_outlined,
                       size: 48,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                      color: theme.colorScheme.onSurface.withAlpha(75),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       'No questions added yet',
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                        color: theme.colorScheme.onSurface.withAlpha(150),
                       ),
                     ),
                   ],
@@ -290,7 +322,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: theme.colorScheme.outline.withValues(alpha: 0.2),
+          color: theme.colorScheme.outline.withAlpha(50),
         ),
       ),
       child: Padding(
@@ -351,12 +383,12 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                       height: 20,
                       decoration: BoxDecoration(
                         color: isCorrect 
-                            ? theme.colorScheme.tertiary.withValues(alpha: 0.2)
+                            ? theme.colorScheme.tertiary.withAlpha(50)
                             : theme.colorScheme.surface,
                         border: Border.all(
                           color: isCorrect 
                               ? theme.colorScheme.tertiary
-                              : theme.colorScheme.outline.withValues(alpha: 0.3),
+                              : theme.colorScheme.outline.withAlpha(75),
                         ),
                         borderRadius: BorderRadius.circular(4),
                       ),
@@ -401,7 +433,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
         const SizedBox(height: 16),
         Card(
           elevation: 0,
-          color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+          color: theme.colorScheme.primaryContainer.withAlpha(75),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -411,7 +443,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildSummaryRow('Title', _titleController.text, theme),
-                _buildSummaryRow('Course', _selectedCourse?.name ?? 'Not selected', theme),
+                _buildSummaryRow('Course', _selectedCourseLabel ?? 'Not selected', theme),
                 _buildSummaryRow('Questions', '${_questions.length}/5', theme),
                 _buildSummaryRow('Duration', '7 minutes', theme),
                 _buildSummaryRow('Auto-start', '35 minutes after class begins', theme),
@@ -423,7 +455,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
           const SizedBox(height: 16),
           Card(
             elevation: 0,
-            color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.3),
+            color: theme.colorScheme.tertiaryContainer.withAlpha(75),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -449,7 +481,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                   Text(
                     'Your quiz is complete and ready to be created. Students will be able to take this quiz when they are present in class.',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                      color: theme.colorScheme.onSurface.withAlpha(175),
                     ),
                   ),
                 ],
@@ -588,20 +620,9 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
     });
   }
 
-  bool _canProceedToNextStep(int currentStep) {
-    switch (currentStep) {
-      case 0:
-        return _formKey.currentState?.validate() ?? false && _selectedCourse != null;
-      case 1:
-        return _questions.length == 5;
-      case 2:
-        return true;
-      default:
-        return false;
-    }
-  }
 
-  void _createQuiz() {
+
+  void _createQuiz() async {
     if (_questions.length != 5) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please add exactly 5 questions')),
@@ -609,18 +630,40 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
       return;
     }
 
+
+    final appProvider = Provider.of<AppProvider>(context, listen: false);
+    final faculty = await _dataService.getFacultyByUserId(appProvider.currentUser!.id);
+    if (faculty == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Faculty profile not found')), 
+      );
+      return;
+    }
+    final timetables = await _dataService.getTimetableByFaculty(faculty.id);
+    if (timetables.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No timetable found for this course')),
+      );
+      return;
+    }
+
     final quiz = Quiz(
-      id: 'quiz_${DateTime.now().millisecondsSinceEpoch}',
-      courseId: _selectedCourse!.id,
-      facultyId: Provider.of<AppProvider>(context, listen: false).currentUser!.id,
-      title: _titleController.text,
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      courseId: _selectedCourseId!,
+      facultyId: faculty.id,
+      title: _titleController.text.trim(),
       questions: _questions,
       createdAt: DateTime.now(),
       scheduledAt: DateTime.now().add(const Duration(minutes: 35)),
+      duration: 7,
       isActive: true,
+      isCancelled: false,
+      isPaused: false,
+      attendanceUploaded: false,
+      attendance: const [],
     );
 
-    Provider.of<AppProvider>(context, listen: false).createQuiz(quiz);
+    await _dataService.createQuiz(quiz);
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Quiz created successfully!')),
@@ -628,4 +671,6 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
 
     Navigator.pop(context);
   }
+
+  // Attendance Excel parsing handled on course level in dashboard
 }

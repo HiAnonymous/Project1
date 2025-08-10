@@ -48,17 +48,32 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 60),
-              _buildHeader(theme),
-              const SizedBox(height: 40),
-              _buildTabBar(theme),
-              const SizedBox(height: 20),
-              Expanded(
-                child: _buildTabViews(),
-              ),
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.only(bottom: 24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 60),
+                        _buildHeader(theme),
+                        const SizedBox(height: 40),
+                        _buildTabBar(theme),
+                        const SizedBox(height: 20),
+                        // Give TabBarView a fixed height to avoid RenderFlex overflow on small viewports
+                        SizedBox(
+                          height: 420,
+                          child: _buildTabViews(),
+                        ),
+                        const Spacer(),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),

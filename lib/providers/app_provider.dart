@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:insightquill/models/user.dart';
 import 'package:insightquill/models/quiz.dart';
 import 'package:insightquill/services/auth_service.dart';
-import 'package:insightquill/services/data_service.dart';
+import 'package:insightquill/services/database_service.dart';
 import 'package:insightquill/models/feedback.dart' as feedback_model;
 
 class AppProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
-  final DataService _dataService = DataService();
+  final DatabaseService _databaseService = DatabaseService();
 
   User? get currentUser => _authService.currentUser;
   bool get isLoggedIn => _authService.isLoggedIn;
@@ -29,7 +29,7 @@ class AppProvider extends ChangeNotifier {
         await _loadUserData();
       }
     } catch (e) {
-      _setError('Failed to initialize app: \$e');
+      _setError('Failed to initialize app: $e');
     } finally {
       _setLoading(false);
     }
@@ -40,17 +40,25 @@ class AppProvider extends ChangeNotifier {
     _clearError();
     
     try {
+      print('AppProvider: Starting login process for $identifier');
       final success = await _authService.login(identifier, role);
+      print('AppProvider: Auth service returned: $success');
+      
       if (success) {
+        print('AppProvider: Loading user data...');
         await _loadUserData();
+        print('AppProvider: User data loaded, notifying listeners');
         notifyListeners();
+        print('AppProvider: Login successful, returning true');
         return true;
       } else {
+        print('AppProvider: Login failed, setting error');
         _setError('Invalid credentials');
         return false;
       }
     } catch (e) {
-      _setError('Login failed: \$e');
+      print('AppProvider: Login exception: $e');
+      _setError('Login failed: $e');
       return false;
     } finally {
       _setLoading(false);
@@ -65,12 +73,33 @@ class AppProvider extends ChangeNotifier {
   }
 
   Future<void> _loadUserData() async {
-    if (currentUser == null) return;
+    if (currentUser == null) {
+      print('AppProvider: _loadUserData called but currentUser is null');
+      return;
+    }
 
-    if (currentUser!.role == UserRole.student) {
-      _activeQuizzes = _dataService.getActiveQuizzesForStudent(currentUser!.id);
-    } else {
-      _activeQuizzes = _dataService.getQuizzesByFaculty(currentUser!.id);
+    try {
+      print('AppProvider: Loading user data for user: ${currentUser!.registrationNumber} with role: ${currentUser!.role}');
+      if (currentUser!.role == UserRole.student) {
+        print('AppProvider: Loading student quizzes...');
+        _activeQuizzes = await _databaseService.getActiveQuizzesForStudent(currentUser!.id);
+        print('AppProvider: Loaded ${_activeQuizzes.length} student quizzes');
+      } else {
+        print('AppProvider: Loading faculty quizzes...');
+        // Fetch the faculty profile to get the faculty document ID
+        final faculty = await _databaseService.getFacultyByUserId(currentUser!.id);
+        if (faculty == null) {
+          print('AppProvider: No faculty profile found for user ${currentUser!.id}');
+          _activeQuizzes = [];
+        } else {
+          _activeQuizzes = await _databaseService.getQuizzesByFaculty(faculty.id);
+        }
+        print('AppProvider: Loaded ${_activeQuizzes.length} faculty quizzes');
+      }
+      print('AppProvider: User data loaded successfully');
+    } catch (e) {
+      print('AppProvider: Error loading user data: $e');
+      _setError('Failed to load user data: $e');
     }
   }
 
@@ -95,23 +124,39 @@ class AppProvider extends ChangeNotifier {
   }
 
   // Quiz-specific methods
-  void createQuiz(Quiz quiz) {
-    _dataService.createQuiz(quiz);
-    refreshQuizzes();
+  void createQuiz(Quiz quiz) async {
+    try {
+      // TODO: Implement quiz creation in database service
+      refreshQuizzes();
+    } catch (e) {
+      _setError('Failed to create quiz: $e');
+    }
   }
 
-  void updateQuiz(Quiz quiz) {
-    _dataService.updateQuiz(quiz);
-    refreshQuizzes();
+  void updateQuiz(Quiz quiz) async {
+    try {
+      // TODO: Implement quiz update in database service
+      refreshQuizzes();
+    } catch (e) {
+      _setError('Failed to update quiz: $e');
+    }
   }
 
-  void submitQuiz(QuizSubmission submission) {
-    _dataService.submitQuiz(submission);
-    notifyListeners();
+  void submitQuiz(QuizSubmission submission) async {
+    try {
+      await _databaseService.submitQuiz(submission);
+      notifyListeners();
+    } catch (e) {
+      _setError('Failed to submit quiz: $e');
+    }
   }
 
-  void submitFeedback(feedback_model.Feedback feedback) {
-    _dataService.submitFeedback(feedback);
-    notifyListeners();
+  void submitFeedback(feedback_model.LectureFeedback feedback) async {
+    try {
+      await _databaseService.submitFeedback(feedback);
+      notifyListeners();
+    } catch (e) {
+      _setError('Failed to submit feedback: $e');
+    }
   }
 }

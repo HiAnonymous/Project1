@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:insightquill/providers/app_provider.dart';
-import 'package:insightquill/services/data_service.dart';
+import 'package:insightquill/services/database_service.dart';
 import 'package:insightquill/models/quiz.dart';
 import 'package:insightquill/models/feedback.dart' as feedback_model;
+import 'package:insightquill/models/course.dart';
+import 'package:insightquill/models/user.dart';
 
 class FeedbackPage extends StatefulWidget {
   final Quiz quiz;
-  final QuizSubmission submission;
+  final StudentQuizResult? submission;
 
   const FeedbackPage({
     super.key,
     required this.quiz,
-    required this.submission,
+    this.submission,
   });
 
   @override
@@ -27,7 +29,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
   
   int _rating = 0;
   final _commentController = TextEditingController();
-  final DataService _dataService = DataService();
+  final DatabaseService _databaseService = DatabaseService();
   bool _isSubmitting = false;
   bool _feedbackSubmitted = false;
 
@@ -45,7 +47,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
     
     _scoreAnimation = Tween<double>(
       begin: 0.0,
-      end: widget.submission.percentage / 100,
+      end: (widget.submission?.percentageScore ?? 0.0) / 100,
     ).animate(CurvedAnimation(
       parent: _scoreAnimationController,
       curve: Curves.easeOutCubic,
@@ -78,50 +80,78 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final course = _dataService.getCourseById(widget.quiz.courseId);
-    final faculty = _dataService.getUserById(widget.quiz.facultyId);
 
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              theme.colorScheme.primaryContainer,
-              theme.colorScheme.surface,
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const SizedBox(height: 20),
-                _buildResultsCard(theme),
-                const SizedBox(height: 32),
-                AnimatedBuilder(
-                  animation: _cardAnimation,
-                  builder: (context, child) => Transform.scale(
-                    scale: _cardAnimation.value,
-                    child: child,
-                  ),
-                  child: _buildFeedbackCard(course, faculty, theme),
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _fetchFeedbackData(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        if (snapshot.hasError) {
+          return Scaffold(body: Center(child: Text('Error: ${snapshot.error}')));
+        }
+        if (!snapshot.hasData || snapshot.data == null) {
+          return const Scaffold(body: Center(child: Text('No data found.')));
+        }
+
+        final course = snapshot.data!['course'] as Course?;
+        final faculty = snapshot.data!['faculty'] as Faculty?;
+        final title = widget.quiz.quizTitle;
+
+        return Scaffold(
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  theme.colorScheme.primaryContainer,
+                  theme.colorScheme.surface,
+                ],
+              ),
+            ),
+            child: SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(height: 20),
+                    _buildResultsCard(theme, title),
+                    const SizedBox(height: 32),
+                    AnimatedBuilder(
+                      animation: _cardAnimation,
+                      builder: (context, child) => Transform.scale(
+                        scale: _cardAnimation.value,
+                        child: child,
+                      ),
+                      child: _buildFeedbackCard(course, faculty, theme),
+                    ),
+                    const SizedBox(height: 24),
+                    _buildSubmitButton(theme),
+                  ],
                 ),
-                const SizedBox(height: 24),
-                _buildSubmitButton(theme),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildResultsCard(ThemeData theme) {
-    final percentage = widget.submission.percentage;
+  Future<Map<String, dynamic>> _fetchFeedbackData() async {
+    final timetables = await _databaseService.getTimetableByFaculty(widget.quiz.createdBy);
+    final timetable = timetables.firstWhere((t) => t.id == widget.quiz.timetableId);
+    final course = await _databaseService.getCourseById(timetable.courseId);
+    final faculty = course != null ? await _databaseService.getFacultyById(course.facultyId) : null;
+    return {
+      'course': course,
+      'faculty': faculty,
+    };
+  }
+
+  Widget _buildResultsCard(ThemeData theme, String title) {
+    final percentage = widget.submission?.percentageScore ?? 0.0;
     final isGoodScore = percentage >= 60;
 
     return Card(
@@ -138,12 +168,12 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
             end: Alignment.bottomRight,
             colors: isGoodScore
                 ? [
-                    theme.colorScheme.tertiary.withValues(alpha: 0.1),
-                    theme.colorScheme.tertiary.withValues(alpha: 0.05),
+                    theme.colorScheme.tertiary.withAlpha(25),
+                    theme.colorScheme.tertiary.withAlpha(12),
                   ]
                 : [
-                    theme.colorScheme.error.withValues(alpha: 0.1),
-                    theme.colorScheme.error.withValues(alpha: 0.05),
+                    theme.colorScheme.error.withAlpha(25),
+                    theme.colorScheme.error.withAlpha(12),
                   ],
           ),
         ),
@@ -166,24 +196,40 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
               ),
               const SizedBox(height: 8),
               Text(
-                widget.quiz.title,
+                title,
                 style: theme.textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w500,
                 ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildScoreInfo('Score', '${widget.submission.score}/${widget.submission.totalQuestions}', theme),
-                  Container(
-                    width: 1,
-                    height: 40,
-                    color: theme.colorScheme.outline.withValues(alpha: 0.3),
-                  ),
-                  _buildScoreInfo('Percentage', '${percentage.toStringAsFixed(1)}%', theme),
-                ],
+              FutureBuilder<List<QuizQuestion>>(
+                future: _databaseService.getQuestionsForQuiz(widget.quiz.id),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(child: Text('Error: ${snapshot.error}'));
+                  }
+                  if (!snapshot.hasData || snapshot.data == null) {
+                    return const Center(child: Text('No questions found.'));
+                  }
+
+                  final questions = snapshot.data!;
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildScoreInfo('Score', '${widget.submission?.score.toInt() ?? 0}/${questions.length}', theme),
+                      Container(
+                        width: 1,
+                        height: 40,
+                        color: theme.colorScheme.outline.withAlpha(75),
+                      ),
+                      _buildScoreInfo('Percentage', '${percentage.toStringAsFixed(1)}%', theme),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 24),
               SizedBox(
@@ -200,7 +246,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
                         child: CircularProgressIndicator(
                           value: _scoreAnimation.value,
                           strokeWidth: 8,
-                          backgroundColor: theme.colorScheme.outline.withValues(alpha: 0.2),
+                          backgroundColor: theme.colorScheme.outline.withAlpha(50),
                           valueColor: AlwaysStoppedAnimation<Color>(
                             isGoodScore ? theme.colorScheme.tertiary : theme.colorScheme.error,
                           ),
@@ -219,7 +265,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
                           Text(
                             isGoodScore ? 'Well Done!' : 'Keep Trying!',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                              color: theme.colorScheme.onSurface.withAlpha(175),
                             ),
                           ),
                         ],
@@ -248,7 +294,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
         Text(
           label,
           style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+            color: theme.colorScheme.onSurface.withAlpha(175),
           ),
         ),
       ],
@@ -283,7 +329,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
               Text(
                 'Your feedback helps improve the learning experience.',
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                  color: theme.colorScheme.onSurface.withAlpha(175),
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -351,9 +397,9 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
                         ),
                       ),
                       Text(
-                        '${course?.name ?? 'Unknown Course'} by ${faculty?.name ?? 'Unknown Faculty'}',
+                        '${course?.name ?? 'Unknown Course'} by ${faculty?.firstName ?? ''} ${faculty?.lastName ?? ''}',
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                          color: theme.colorScheme.onSurface.withAlpha(175),
                         ),
                       ),
                     ],
@@ -417,7 +463,7 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(
-                    color: theme.colorScheme.outline.withValues(alpha: 0.3),
+                    color: theme.colorScheme.outline.withAlpha(75),
                   ),
                 ),
                 focusedBorder: OutlineInputBorder(
@@ -504,17 +550,16 @@ class _FeedbackPageState extends State<FeedbackPage> with TickerProviderStateMix
 
     setState(() => _isSubmitting = true);
 
-    final feedback = feedback_model.Feedback(
+    final feedback = feedback_model.LectureFeedback(
       id: 'fb_${DateTime.now().millisecondsSinceEpoch}',
       studentId: Provider.of<AppProvider>(context, listen: false).currentUser!.id,
-      facultyId: widget.quiz.facultyId,
-      courseId: widget.quiz.courseId,
+      sessionId: widget.submission?.sessionId ?? widget.quiz.id,
       rating: _rating,
-      comment: _commentController.text.trim(),
+      comments: _commentController.text.trim(),
       submittedAt: DateTime.now(),
     );
 
-    Provider.of<AppProvider>(context, listen: false).submitFeedback(feedback);
+    await _databaseService.submitFeedback(feedback);
 
     await Future.delayed(const Duration(milliseconds: 500)); // Simulate network delay
 
