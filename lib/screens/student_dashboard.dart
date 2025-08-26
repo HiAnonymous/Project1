@@ -118,11 +118,39 @@ class _StudentDashboardState extends State<StudentDashboard> {
 
   Future<Map<String, dynamic>> _fetchOverviewData(String studentId) async {
     final courses = await _dataService.getCoursesByStudent(studentId);
-    final activeQuizzes = await _dataService.getActiveQuizzesForStudent(studentId);
+    // Fetch active quizzes then filter by temporal status
+    final activeQuizzesRaw = await _dataService.getActiveQuizzesForStudent(studentId);
+    final List<Quiz> activeQuizzes = [];
+    for (final q in activeQuizzesRaw) {
+      final status = await _computeStudentQuizTemporalStatus(q);
+      if (status == 'ongoing') activeQuizzes.add(q);
+    }
     return {
       'courses': courses,
       'activeQuizzes': activeQuizzes,
     };
+  }
+
+  Future<String> _computeStudentQuizTemporalStatus(Quiz quiz) async {
+    final now = DateTime.now();
+    // If any running session exists and not ended -> ongoing
+    final session = await _dataService.getLatestSessionForQuiz(quiz.id);
+    if (session != null) {
+      if (session.status == 'ended' || now.isAfter(session.endTime)) return 'ended';
+      if (session.status == 'running' && now.isBefore(session.endTime)) return 'ongoing';
+      if (session.status == 'paused') return 'upcoming';
+    }
+    // Fall back to scheduled window if no session
+    if (quiz.isCancelled) return 'ended';
+    if (quiz.scheduledAt != null) {
+      final start = quiz.scheduledAt!;
+      final end = start.add(Duration(minutes: quiz.duration));
+      if (now.isAfter(start) && now.isBefore(end) && quiz.isActive && !quiz.isPaused) {
+        return 'ongoing';
+      }
+      if (now.isAfter(end)) return 'ended';
+    }
+    return 'upcoming';
   }
 
   Widget _buildWelcomeCard(ThemeData theme) {
@@ -395,7 +423,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      '10 questions', // Placeholder
+                      '${quiz.questions.length} questions',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                       ),
@@ -408,7 +436,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      '7 minutes', // Placeholder
+                      '${quiz.duration} minutes',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                       ),
@@ -448,9 +476,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
   }
 
   Future<Map<String, dynamic>> _fetchQuizCardData(Quiz quiz, String studentId) async {
-    final timetables = await _dataService.getTimetableByStudent(studentId);
-    final timetable = timetables.firstWhere((t) => t.id == quiz.timetableId);
-    final course = await _dataService.getCourseById(timetable.courseId);
+    final course = await _dataService.getCourseById(quiz.courseId);
     final submission = await _dataService.getSubmissionByStudentAndQuiz(studentId, quiz.id);
     return {
       'course': course,
@@ -557,7 +583,15 @@ class _StudentDashboardState extends State<StudentDashboard> {
         ),
         Expanded(
           child: FutureBuilder<List<Quiz>>(
-            future: _dataService.getActiveQuizzesForStudent(studentId),
+            future: () async {
+              final raw = await _dataService.getActiveQuizzesForStudent(studentId);
+              final List<Quiz> filtered = [];
+              for (final q in raw) {
+                final status = await _computeStudentQuizTemporalStatus(q);
+                if (status == 'ongoing') filtered.add(q);
+              }
+              return filtered;
+            }(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());

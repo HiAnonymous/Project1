@@ -19,7 +19,7 @@ class QuizTakingPage extends StatefulWidget {
 
 class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObserver {
   late Timer _timer;
-  late Duration _timeRemaining;
+  Duration _timeRemaining = Duration.zero;
   int _currentQuestionIndex = 0;
   Map<String, int> _answers = {};
   bool _isSubmitting = false;
@@ -123,6 +123,17 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
           automaticallyImplyLeading: false,
           centerTitle: true,
           actions: [
+            TextButton.icon(
+              onPressed: _onStopPressed,
+              icon: Icon(Icons.stop, color: theme.colorScheme.onError),
+              label: Text(
+                'Stop',
+                style: TextStyle(color: theme.colorScheme.onError, fontWeight: FontWeight.bold),
+              ),
+              style: TextButton.styleFrom(
+                foregroundColor: theme.colorScheme.onError,
+              ),
+            ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               margin: const EdgeInsets.only(right: 16),
@@ -176,9 +187,10 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
   }
 
   Widget _buildQuizHeader(ThemeData theme) {
-    // Placeholder for question count
-    final totalQuestions = 10; 
-    final progress = (_currentQuestionIndex + 1) / totalQuestions;
+    final totalQuestions = widget.quiz.questions.length;
+    final progress = totalQuestions == 0
+        ? 0.0
+        : (_currentQuestionIndex + 1) / totalQuestions;
     
     return Container(
       padding: const EdgeInsets.all(16),
@@ -189,13 +201,17 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Question ${_currentQuestionIndex + 1} of $totalQuestions',
+                totalQuestions == 0
+                    ? 'No questions'
+                    : 'Question ${_currentQuestionIndex + 1} of $totalQuestions',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
               ),
               Text(
-                '${_answers.length}/$totalQuestions Answered',
+                totalQuestions == 0
+                    ? '0 answered'
+                    : '${_answers.length}/$totalQuestions Answered',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                 ),
@@ -243,14 +259,20 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
   }
 
   Widget _buildQuestionCard(ThemeData theme) {
-    // Placeholder for questions. This needs to be fetched from the database.
-    final question = QuizQuestion(
-      id: 'q1', 
-      quizId: widget.quiz.id, 
-      questionText: 'This is a sample question.', 
-      options: ['Option A', 'Option B', 'Option C', 'Option D'], 
-      correctAnswer: 'Option A'
-    );
+    final totalQuestions = widget.quiz.questions.length;
+    if (totalQuestions == 0) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Text(
+            'This quiz has no questions.',
+            style: theme.textTheme.titleMedium,
+          ),
+        ),
+      );
+    }
+
+    final question = widget.quiz.questions[_currentQuestionIndex];
     final selectedAnswer = _answers[question.id];
 
     return SingleChildScrollView(
@@ -293,7 +315,7 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        question.questionText,
+                        question.text,
                         style: theme.textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -380,8 +402,7 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
   }
 
   Widget _buildNavigationControls(ThemeData theme) {
-    // Placeholder for question count
-    final totalQuestions = 10; 
+    final totalQuestions = widget.quiz.questions.length; 
     final isLastQuestion = _currentQuestionIndex == totalQuestions - 1;
     final canSubmit = _answers.length == totalQuestions;
 
@@ -415,9 +436,11 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
           if (_currentQuestionIndex > 0) const SizedBox(width: 16),
           Expanded(
             child: ElevatedButton(
-              onPressed: isLastQuestion 
-                ? (canSubmit && !_isSubmitting ? _submitQuiz : null)
-                : () => setState(() => _currentQuestionIndex++),
+              onPressed: totalQuestions == 0
+                ? null
+                : isLastQuestion 
+                  ? (canSubmit && !_isSubmitting ? _submitQuiz : null)
+                  : () => setState(() => _currentQuestionIndex++),
               style: ElevatedButton.styleFrom(
                 backgroundColor: isLastQuestion 
                     ? theme.colorScheme.tertiary
@@ -524,6 +547,92 @@ class _QuizTakingPageState extends State<QuizTakingPage> with WidgetsBindingObse
         });
       }
     }
+  }
+
+  Future<void> _finalizeQuizEarlyWithPopup() async {
+    if (_isSubmitting) return;
+    _timer.cancel();
+    setState(() => _isSubmitting = true);
+
+    try {
+      // Compute score with whatever answers are present
+      int correctAnswers = 0;
+      for (final entry in _answers.entries) {
+        final question = widget.quiz.questions.firstWhere((q) => q.id == entry.key);
+        if (entry.value == question.correctAnswer) {
+          correctAnswers++;
+        }
+      }
+
+      final totalQuestions = widget.quiz.questions.length;
+      final submission = QuizSubmission(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        quizId: widget.quiz.id,
+        studentId: Provider.of<AppProvider>(context, listen: false).currentUser!.id,
+        answers: _answers,
+        submittedAt: DateTime.now(),
+        score: correctAnswers,
+        totalQuestions: totalQuestions,
+      );
+
+      Provider.of<AppProvider>(context, listen: false).submitQuiz(submission);
+
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Quiz Ended'),
+          content: const Text('Your responses have been submitted.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => FeedbackPage(quiz: widget.quiz)),
+                );
+              },
+              child: const Text('View Feedback'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to end quiz: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  void _onStopPressed() {
+    if (_isSubmitting) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('End Quiz?'),
+        content: const Text('Are you sure you want to end the quiz now? You won\'t be able to change your answers.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _finalizeQuizEarlyWithPopup();
+            },
+            child: const Text('End Now'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _autoSubmitQuiz() {

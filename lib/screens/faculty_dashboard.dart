@@ -12,6 +12,7 @@ import 'package:insightquill/screens/quiz_analytics_page.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart' as excel_pkg;
 import 'dart:async';
+import 'package:insightquill/widgets/db_activity_dialog.dart';
 
 class FacultyDashboard extends StatefulWidget {
   const FacultyDashboard({super.key});
@@ -23,7 +24,9 @@ class FacultyDashboard extends StatefulWidget {
 class _FacultyDashboardState extends State<FacultyDashboard> {
   final DatabaseService _dataService = DatabaseService();
   int _currentIndex = 0;
-  Timer? _tickTimer;
+  bool _isDbBusy = false;
+  String? _selectedCourseIdForFilter; // null = All courses
+  // Removed global caching to avoid showing stale data after creation
 
   String _getDayName(int weekday) {
     switch (weekday) {
@@ -49,15 +52,10 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
   @override
   void initState() {
     super.initState();
-    // Refresh time-sensitive sections every second (for live timers)
-    _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
-    });
   }
 
   @override
   void dispose() {
-    _tickTimer?.cancel();
     super.dispose();
   }
 
@@ -66,7 +64,6 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
     final theme = Theme.of(context);
     final appProvider = Provider.of<AppProvider>(context);
     final user = appProvider.currentUser!;
-
 
     return Scaffold(
       appBar: AppBar(
@@ -294,9 +291,12 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
           final codeController = TextEditingController();
           final programIdController = TextEditingController();
           final departmentController = TextEditingController();
-          final startTimeController = TextEditingController();
-          final endTimeController = TextEditingController();
-          String dayOfWeek = 'Monday';
+          int credits = 1;
+          // Dynamic session inputs based on credits
+          int sessionCount = 1;
+          final List<TextEditingController> startControllers = [TextEditingController()];
+          final List<TextEditingController> endControllers = [TextEditingController()];
+          final List<String> days = ['Monday'];
 
           await showDialog(
             context: context,
@@ -324,37 +324,68 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                         decoration: const InputDecoration(labelText: 'Department'),
                       ),
                       const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('Class Timings', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
-                      ),
-                      const SizedBox(height: 8),
                       Row(
                         children: [
-                          Expanded(
-                            child: TextField(
-                              controller: startTimeController,
-                              decoration: const InputDecoration(hintText: 'Start (HH:MM)'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: endTimeController,
-                              decoration: const InputDecoration(hintText: 'End (HH:MM)'),
-                            ),
+                          Expanded(child: Text('Credits (classes per week)', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold))),
+                          DropdownButton<int>(
+                            value: credits,
+                            items: const [1,2,3,4,5,6].map((c) => DropdownMenuItem(value: c, child: Text('$c'))).toList(),
+                            onChanged: (v) {
+                              credits = v ?? 1;
+                              // Adjust session arrays
+                              sessionCount = credits;
+                              while (startControllers.length < sessionCount) {
+                                startControllers.add(TextEditingController());
+                                endControllers.add(TextEditingController());
+                                days.add('Monday');
+                              }
+                              while (startControllers.length > sessionCount) {
+                                startControllers.removeLast();
+                                endControllers.removeLast();
+                                days.removeLast();
+                              }
+                              (dialogContext as Element).markNeedsBuild();
+                            },
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<String>(
-                        value: dayOfWeek,
-                        items: const [
-                          'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'
-                        ].map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
-                        onChanged: (v) => dayOfWeek = v ?? 'Monday',
-                        decoration: const InputDecoration(labelText: 'Day of Week'),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Weekly Sessions', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
                       ),
+                      const SizedBox(height: 8),
+                      for (int i = 0; i < sessionCount; i++) ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: startControllers[i],
+                                decoration: InputDecoration(hintText: 'Start (HH:MM) • Session ${i+1}'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: endControllers[i],
+                                decoration: const InputDecoration(hintText: 'End (HH:MM)'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: days[i],
+                          items: const [
+                            'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'
+                          ].map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
+                          onChanged: (v) {
+                            days[i] = v ?? 'Monday';
+                          },
+                          decoration: const InputDecoration(labelText: 'Day of Week'),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                     ],
                   ),
                 ),
@@ -381,18 +412,19 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                         return;
                       }
 
-                      // Parse HH:MM times
-                      DateTime? startTime;
-                      DateTime? endTime;
-                      try {
-                        final now = DateTime.now();
-                        if (startTimeController.text.trim().isNotEmpty && endTimeController.text.trim().isNotEmpty) {
-                          final sParts = startTimeController.text.trim().split(':').map((e)=>int.parse(e)).toList();
-                          final eParts = endTimeController.text.trim().split(':').map((e)=>int.parse(e)).toList();
-                          startTime = DateTime(now.year, now.month, now.day, sParts[0], sParts[1]);
-                          endTime = DateTime(now.year, now.month, now.day, eParts[0], eParts[1]);
-                        }
-                      } catch (_) {}
+                      // Parse HH:MM times per session
+                      final now = DateTime.now();
+                      final parsedSessions = <Map<String, dynamic>>[];
+                      for (int i = 0; i < sessionCount; i++) {
+                        try {
+                          if (startControllers[i].text.trim().isEmpty || endControllers[i].text.trim().isEmpty) continue;
+                          final sParts = startControllers[i].text.trim().split(':').map((e)=>int.parse(e)).toList();
+                          final eParts = endControllers[i].text.trim().split(':').map((e)=>int.parse(e)).toList();
+                          final sTime = DateTime(now.year, now.month, now.day, sParts[0], sParts[1]);
+                          final eTime = DateTime(now.year, now.month, now.day, eParts[0], eParts[1]);
+                          parsedSessions.add({'start': sTime, 'end': eTime, 'day': days[i]});
+                        } catch (_) {}
+                      }
 
                       if (faculty == null) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -410,21 +442,26 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                       );
 
                       if (created != null) {
-                        // Optional: create a timetable entry for provided timings
-                        if (startTime != null && endTime != null) {
+                        // Create multiple timetable entries based on credits/sessions
+                        if (parsedSessions.isNotEmpty) {
                           final facultyName = faculty.firstName + ' ' + faculty.lastName;
-                          await _dataService.createTimetable(
-                            courseId: created.id,
-                            courseName: created.name,
-                            facultyName: facultyName,
-                            startTime: startTime,
-                            endTime: endTime,
-                            dayOfWeek: dayOfWeek,
-                          );
+                          for (final sess in parsedSessions) {
+                            await _dataService.createTimetable(
+                              courseId: created.id,
+                              courseName: created.name,
+                              facultyName: facultyName,
+                              startTime: sess['start'] as DateTime,
+                              endTime: sess['end'] as DateTime,
+                              dayOfWeek: sess['day'] as String,
+                            );
+                          }
                         }
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Course created successfully')),
                         );
+                        // Refresh overview cached future so the new course shows up immediately
+                        final app = Provider.of<AppProvider>(context, listen: false);
+                        _fetchOverviewData(app.currentUser!.id); // Re-fetch overview to update data
                         if (mounted) {
                           setState(() {});
                         }
@@ -560,7 +597,7 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
             ),
             if (!hasStudents)
               ElevatedButton.icon(
-                onPressed: () => _uploadStudentsForCourse(course),
+                onPressed: _isDbBusy ? null : () => _uploadStudentsForCourse(course),
                 icon: Icon(Icons.upload_file, color: theme.colorScheme.onPrimary),
                 label: Text('Upload Students', style: TextStyle(color: theme.colorScheme.onPrimary)),
                 style: ElevatedButton.styleFrom(backgroundColor: theme.colorScheme.primary),
@@ -578,7 +615,15 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
   }
 
   Future<void> _uploadStudentsForCourse(Course course) async {
+    if (_isDbBusy) return;
+    setState(() => _isDbBusy = true);
     try {
+      final activity = showDbActivityDialog(
+        context,
+        title: 'Updating database',
+        subtitle: 'Uploading roster for ${course.code} • ${course.name}',
+      );
+      activity.addLog('Reading Excel file...');
       final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx', 'xls']);
       if (result == null || result.files.isEmpty) return;
       final bytes = result.files.single.bytes ?? await result.files.single.xFile.readAsBytes();
@@ -586,8 +631,12 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
       final firstSheet = excel.sheets.values.first;
       // Parse roster rows with rich columns
       final List<Map<String, dynamic>> roster = [];
+      final List<String> registrationNumbers = [];
+      final List<Map<String, String>> minimalStudents = [];
       bool headerParsed = false;
       List<String> headers = [];
+      int totalRows = firstSheet.maxRows - 1; // minus header
+      int processed = 0;
       for (final row in firstSheet.rows) {
         final cells = row.map((c) => c?.value?.toString() ?? '').toList();
         if (!headerParsed) {
@@ -611,13 +660,21 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
         // Default attendance
         map['ATTENDANCE'] = 'Absent';
         roster.add(map);
+        if (registerNo.isNotEmpty) {
+          registrationNumbers.add(registerNo);
+          minimalStudents.add({'reg': registerNo, 'name': name, 'email': email});
+        }
+        processed++;
+        if (totalRows > 0) activity.setProgress((processed / totalRows).clamp(0.0, 0.9));
       }
 
       if (roster.isEmpty) {
+        activity.markError('No valid student rows found in Excel');
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No valid student rows found in Excel')));
         return;
       }
 
+      activity.addLog('Writing roster to course document...');
       // For testing: mark a few as Present
       for (int i = 0; i < roster.length; i++) {
         if (i % 5 == 0) {
@@ -633,10 +690,39 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
             .toList(),
       });
 
+      activity.addLog('Ensuring student accounts and enrollments...');
+      // Ensure users/students exist, then enroll
+      int ensured = 0;
+      for (final s in minimalStudents) {
+        final userId = await _dataService.ensureStudentForRegistrationNumber(
+          registrationNumber: s['reg'] ?? '',
+          programId: course.programId,
+          departmentId: course.department,
+          name: s['name'],
+          email: s['email'],
+        );
+        if (userId != null) {
+          ensured++;
+          await _dataService.createEnrollment(studentUserId: userId, courseId: course.id);
+        }
+        if (roster.isNotEmpty) activity.setProgress(0.9 + (ensured / roster.length) * 0.1);
+      }
+
       if (mounted) setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Uploaded ${roster.length} students to ${course.code}')));
+      activity.addLog('Completed. Ensured $ensured students, updated roster and enrollments.');
+      activity.markDone('All changes saved to Firestore.');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Uploaded ${roster.length} rows; ensured $ensured students and enrolled them to ${course.code}'),
+      ));
     } catch (e) {
+      // Try to close dialog with error
+      try {
+        showDbActivityDialog(context, title: 'Database error')
+          ..markError(e.toString());
+      } catch (_) {}
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to upload students: $e')));
+    } finally {
+      if (mounted) setState(() => _isDbBusy = false);
     }
   }
 
@@ -857,49 +943,55 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
   }
 
   Widget _buildQuizCard(Quiz quiz, ThemeData theme) {
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 8),
-      color: theme.colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: theme.colorScheme.outline.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                quiz.quizTitle,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
+    return FutureBuilder<String>(
+      future: _computeQuizTemporalStatus(quiz),
+      builder: (context, snap) {
+        final status = (snap.data ?? 'upcoming').toLowerCase();
+        final display = status[0].toUpperCase() + status.substring(1);
+        Color bg;
+        Color fg;
+        if (status == 'ongoing') {
+          bg = theme.colorScheme.tertiary.withValues(alpha: 0.25);
+          fg = theme.colorScheme.tertiary;
+        } else if (status == 'ended') {
+          bg = theme.colorScheme.error.withValues(alpha: 0.2);
+          fg = theme.colorScheme.error;
+        } else {
+          bg = theme.colorScheme.secondary.withValues(alpha: 0.25);
+          fg = theme.colorScheme.secondary;
+        }
+
+        return Card(
+          elevation: 0,
+          margin: const EdgeInsets.only(bottom: 8),
+          color: theme.colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.colorScheme.outline.withValues(alpha: 0.2)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    quiz.quizTitle,
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                  ),
                 ),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: quiz.status == 'active'
-                    ? theme.colorScheme.tertiary.withValues(alpha: 0.2)
-                    : theme.colorScheme.onSurface.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                quiz.status,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: quiz.status == 'active'
-                      ? theme.colorScheme.tertiary
-                      : theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  fontWeight: FontWeight.bold,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
+                  child: Text(
+                    display,
+                    style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.bold),
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -912,22 +1004,23 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
             children: [
               Expanded(
                 child: Text(
-                  'My Quizzes',
+                  'Quizzes by Course',
                   style: theme.textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
+              // Course filter dropdown will be populated once data loads below
               ElevatedButton.icon(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const QuizCreationPage()),
-                ),
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const QuizCreationPage()),
+                  );
+                  if (mounted) setState(() {});
+                },
                 icon: Icon(Icons.add, color: theme.colorScheme.onPrimary),
-                label: Text(
-                  'Create Quiz',
-                  style: TextStyle(color: theme.colorScheme.onPrimary),
-                ),
+                label: Text('Create Quiz', style: TextStyle(color: theme.colorScheme.onPrimary)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: theme.colorScheme.primary,
                   foregroundColor: theme.colorScheme.onPrimary,
@@ -937,16 +1030,13 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
           ),
         ),
         Expanded(
-          child: FutureBuilder<List<Quiz>>(
+          child: FutureBuilder<Map<String, dynamic>>(
             future: () async {
               final faculty = await _dataService.getFacultyByUserId(userId);
-              if (faculty == null) return <Quiz>[];
-              // Filter out quizzes whose courses have been removed
+              if (faculty == null) return {'courses': <Course>[], 'quizzes': <Quiz>[]};
               final courses = await _dataService.getCoursesByFaculty(faculty.id);
-              if (courses.isEmpty) return <Quiz>[];
-              final courseIds = courses.map((c) => c.id).toSet();
-              final quizzes = await _dataService.getQuizzesByFaculty(faculty.id);
-              return quizzes.where((q) => courseIds.contains(q.courseId)).toList();
+              final quizzes = await _loadQuizzesForFaculty(userId);
+              return {'courses': courses, 'quizzes': quizzes};
             }(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -955,42 +1045,85 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
               if (snapshot.hasError) {
                 return Center(child: Text('Error: ${snapshot.error}'));
               }
-              if (!snapshot.hasData || snapshot.data == null || snapshot.data!.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.quiz_outlined,
-                        size: 64,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No quizzes created yet',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Create your first quiz to get started',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
+              final courses = (snapshot.data?['courses'] as List<Course>? ?? []);
+              final quizzes = (snapshot.data?['quizzes'] as List<Quiz>? ?? []);
+              if (courses.isEmpty) {
+                return const Center(child: Text('No courses found'));
               }
 
-              final quizzes = snapshot.data!;
+              // De-duplicate courses by id (safety)
+              final Map<String, Course> uniqueCourseMap = {
+                for (final c in courses) c.id: c,
+              };
+              final uniqueCourses = uniqueCourseMap.values.toList();
+              final availableIds = uniqueCourses.map((c) => c.id).toSet();
+              final safeSelectedValue = (availableIds.contains(_selectedCourseIdForFilter)) ? _selectedCourseIdForFilter : null;
+
+              // Build filter dropdown now that we have courses
+              final dropdown = Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.filter_list, size: 18, color: theme.colorScheme.onSurface.withValues(alpha: 0.7)),
+                    const SizedBox(width: 8),
+                    Text('Course:', style: theme.textTheme.bodyMedium),
+                    const SizedBox(width: 8),
+                    DropdownButton<String?>(
+                      value: safeSelectedValue,
+                      items: [
+                        const DropdownMenuItem<String?>(value: null, child: Text('All')),
+                        ...uniqueCourses.map((c) => DropdownMenuItem<String?> (
+                              value: c.id,
+                              child: Text('${c.code} • ${c.name}'),
+                            )),
+                      ],
+                      onChanged: (v) {
+                        setState(() => _selectedCourseIdForFilter = v);
+                      },
+                    ),
+                  ],
+                ),
+              );
+
+              // Group quizzes by course
+              final Map<String, List<Quiz>> courseIdToQuizzes = {};
+              for (final q in quizzes) {
+                (courseIdToQuizzes[q.courseId] ??= []).add(q);
+              }
+
+              final filteredCourses = safeSelectedValue == null
+                  ? uniqueCourses
+                  : uniqueCourses.where((c) => c.id == safeSelectedValue).toList();
+
               return ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: quizzes.length,
-                itemBuilder: (context, index) {
-                  final quiz = quizzes[index];
-                  return _buildDetailedQuizCard(quiz, theme);
+                itemCount: 1 + filteredCourses.length,
+                itemBuilder: (context, idx) {
+                  if (idx == 0) return dropdown;
+                  final course = filteredCourses[idx - 1];
+                  final courseQuizzes = courseIdToQuizzes[course.id] ?? [];
+                  if (courseQuizzes.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${course.code} • ${course.name}', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Text('Upcoming', style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.secondary, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 8),
+                        ...courseQuizzes.map((q) => _buildStatusFilteredQuizCard(q, theme, desired: 'upcoming')),
+                        const SizedBox(height: 12),
+                        Text('Ongoing', style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.tertiary, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 8),
+                        ...courseQuizzes.map((q) => _buildStatusFilteredQuizCard(q, theme, desired: 'ongoing')),
+                        const SizedBox(height: 12),
+                        Text('Ended', style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.error, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 8),
+                        ...courseQuizzes.map((q) => _buildStatusFilteredQuizCard(q, theme, desired: 'ended')),
+                      ],
+                    ),
+                  );
                 },
               );
             },
@@ -1000,8 +1133,30 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
     );
   }
 
+  // Builds a quiz card only if its computed temporal status matches desired.
+  Widget _buildStatusFilteredQuizCard(Quiz quiz, ThemeData theme, {required String desired}) {
+    return FutureBuilder<String>(
+      future: _computeQuizTemporalStatus(quiz),
+      builder: (context, snap) {
+        final status = (snap.data ?? 'upcoming').toLowerCase();
+        if (status != desired) return const SizedBox.shrink();
+        return _buildDetailedQuizCard(quiz, theme);
+      },
+    );
+  }
+
+  Future<List<Quiz>> _loadQuizzesForFaculty(String userId) async {
+    final faculty = await _dataService.getFacultyByUserId(userId);
+    if (faculty == null) return <Quiz>[];
+    final courses = await _dataService.getCoursesByFaculty(faculty.id);
+    if (courses.isEmpty) return <Quiz>[];
+    final courseIds = courses.map((c) => c.id).toSet();
+    final quizzes = await _dataService.getQuizzesByFaculty(faculty.id);
+    return quizzes.where((q) => courseIds.contains(q.courseId)).toList();
+  }
+
   Widget _buildDetailedQuizCard(Quiz quiz, ThemeData theme) {
-    return FutureBuilder<Timetable?>(
+    return FutureBuilder<Timetable?> (
       future: _getTimetableForQuiz(quiz),
       builder: (context, timetableSnapshot) {
         if (timetableSnapshot.connectionState == ConnectionState.waiting) {
@@ -1037,20 +1192,27 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
 
                 final submissions = submissionsSnapshot.data ?? [];
 
-                // Calculate auto session window: start 3 min after class start, run 7 minutes
+                // Compute next weekly occurrence window based on timetable day/time
                 final now = DateTime.now();
-                DateTime? autoStart;
-                DateTime? autoEnd;
-                bool hasStarted = false;
-                bool hasEnded = false;
-                bool isOngoing = false;
+                DateTime? windowStart;
+                DateTime? windowEnd;
                 if (timetable != null) {
-                  autoStart = DateTime(now.year, now.month, now.day, timetable.startTime.hour, timetable.startTime.minute)
-                      .add(const Duration(minutes: 3));
-                  autoEnd = autoStart.add(const Duration(minutes: 7));
-                  hasStarted = now.isAfter(autoStart);
-                  hasEnded = now.isAfter(autoEnd);
-                  isOngoing = hasStarted && !hasEnded && !quiz.isPaused && !quiz.isCancelled;
+                  int targetWeekday = _weekdayNumber(timetable.dayOfWeek);
+                  int today = now.weekday;
+                  int addDays = (targetWeekday - today) % 7;
+                  // If class today but already past end, push to next week occurrence
+                  final candidateStart = DateTime(now.year, now.month, now.day, timetable.startTime.hour, timetable.startTime.minute).add(Duration(days: addDays));
+                  final adjustedStart = candidateStart.add(const Duration(minutes: 3));
+                  final adjustedEnd = adjustedStart.add(Duration(minutes: quiz.duration));
+                  if (addDays == 0 && now.isAfter(adjustedEnd)) {
+                    // use next week
+                    windowStart = candidateStart.add(const Duration(days: 7));
+                    final nextTestStart = windowStart.add(const Duration(minutes: 3));
+                    windowEnd = nextTestStart.add(Duration(minutes: quiz.duration));
+                  } else {
+                    windowStart = candidateStart;
+                    windowEnd = adjustedEnd;
+                  }
                 }
 
                 return Card(
@@ -1102,6 +1264,31 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                                     ),
                                     child: Text('Attendance pending', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onErrorContainer)),
                                   ),
+                                const SizedBox(width: 8),
+                                // Add quick stop button for ongoing quizzes
+                                FutureBuilder<String>(
+                                  future: _computeQuizTemporalStatus(quiz),
+                                  builder: (context, statusSnapshot) {
+                                    final status = (statusSnapshot.data ?? 'upcoming').toLowerCase();
+                                    if (status == 'ongoing') {
+                                      return Container(
+                                        decoration: BoxDecoration(
+                                          color: theme.colorScheme.error.withValues(alpha: 0.1),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.3)),
+                                        ),
+                                        child: IconButton(
+                                          onPressed: () => _showStopQuizConfirmation(quiz),
+                                          icon: Icon(Icons.stop, color: theme.colorScheme.error, size: 20),
+                                          tooltip: 'Stop Quiz Immediately',
+                                          padding: const EdgeInsets.all(8),
+                                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                        ),
+                                      );
+                                    }
+                                    return const SizedBox.shrink();
+                                  },
+                                ),
                               ],
                             )
                           ],
@@ -1109,39 +1296,120 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                         const SizedBox(height: 16),
                         Row(
                           children: [
-                            _buildQuizInfo('Questions', '10', Icons.quiz, theme),
+                            _buildQuizInfo('Questions', quiz.questions.length.toString(), Icons.quiz, theme),
                             const SizedBox(width: 16),
-                            _buildQuizInfo('Duration', '7m', Icons.timer, theme),
+                            _buildQuizInfo('Duration', '${quiz.duration}m', Icons.timer, theme),
                             const SizedBox(width: 16),
                             _buildQuizInfo('Submissions', submissions.length.toString(), Icons.assignment_turned_in, theme),
                             const SizedBox(width: 16),
-                            _buildQuizInfo('Status', timetable == null ? 'no timetable' : (isOngoing ? 'running' : (hasEnded ? 'ended' : 'scheduled')), Icons.schedule, theme),
+                            FutureBuilder<String>(
+                              future: _computeQuizTemporalStatus(quiz),
+                              builder: (context, statusSnapshot) {
+                                final status = statusSnapshot.data ?? 'upcoming';
+                                return _buildQuizInfo('Status', status, Icons.schedule, theme);
+                              },
+                            ),
                           ],
+                        ),
+                        const SizedBox(height: 8),
+                        FutureBuilder<String>(
+                          future: _computeQuizTemporalStatus(quiz),
+                          builder: (context, statusSnapshot) {
+                            final temporalStatus = statusSnapshot.data ?? 'upcoming';
+                            // Don't show any timer if quiz is ended
+                            if (temporalStatus == 'ended') {
+                              return const SizedBox.shrink();
+                            }
+                            
+                            return FutureBuilder<QuizSession?>(
+                              future: _dataService.getLatestSessionForQuiz(quiz.id),
+                              builder: (context, sessionSnap) {
+                                final now = DateTime.now();
+                                DateTime? endAt;
+                                if (sessionSnap.hasData && sessionSnap.data != null) {
+                                  final session = sessionSnap.data!;
+                                  if (session.status == 'paused') {
+                                    final remainingMs = session.remainingMs ?? 0;
+                                    final remaining = Duration(milliseconds: remainingMs);
+                                    final mm = remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
+                                    final ss = (remaining.inSeconds.remainder(60)).toString().padLeft(2, '0');
+                                    return Row(
+                                      children: [
+                                        Icon(Icons.pause_circle_filled, size: 16, color: theme.colorScheme.secondary),
+                                        const SizedBox(width: 6),
+                                        Text('Paused • $mm:$ss left', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary, fontWeight: FontWeight.w600)),
+                                      ],
+                                    );
+                                  }
+                                  if (session.status == 'running') {
+                                    endAt = session.endTime;
+                                  } else if (session.status == 'ended') {
+                                    // Quiz has been manually stopped, don't show timer
+                                    return const SizedBox.shrink();
+                                  } else {
+                                    return const SizedBox.shrink();
+                                  }
+                                } else if (windowStart != null && windowEnd != null) {
+                                  // Auto-start at course start + 3 minutes with fixed 10-minute duration
+                                  final autoStart = windowStart.add(const Duration(minutes: 3));
+                                  if (now.isAfter(autoStart) && now.isBefore(windowEnd)) {
+                                    final newSession = QuizSession(
+                                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                      quizId: quiz.id,
+                                      startTime: autoStart,
+                                      endTime: autoStart.add(Duration(minutes: quiz.duration)),
+                                      status: 'running',
+                                    );
+                                    _dataService.createQuizSession(newSession);
+                                    endAt = newSession.endTime;
+                                  }
+                                }
+                                if (endAt != null && now.isBefore(endAt)) {
+                                  return _buildEndsInCountdown(endAt, theme);
+                                }
+                                return const SizedBox.shrink();
+                              },
+                            );
+                          },
                         ),
                         const SizedBox(height: 16),
                         Row(
                           children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: quiz.status == 'active'
-                                    ? theme.colorScheme.tertiary.withValues(alpha: 0.2)
-                                    : quiz.status == 'cancelled'
-                                        ? theme.colorScheme.error.withValues(alpha: 0.2)
-                                        : theme.colorScheme.onSurface.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Text(
-                                quiz.status,
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: quiz.status == 'active'
-                                      ? theme.colorScheme.tertiary
-                                      : quiz.status == 'cancelled'
-                                          ? theme.colorScheme.error
-                                          : theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
+                            FutureBuilder<String>(
+                              future: _computeQuizTemporalStatus(quiz),
+                              builder: (context, statusSnapshot) {
+                                final status = statusSnapshot.data ?? 'upcoming';
+                                Color bgColor;
+                                Color textColor;
+                                if (status == 'ongoing') {
+                                  bgColor = theme.colorScheme.tertiary.withValues(alpha: 0.25);
+                                  textColor = theme.colorScheme.tertiary;
+                                } else if (status == 'upcoming') {
+                                  bgColor = theme.colorScheme.secondary.withValues(alpha: 0.25);
+                                  textColor = theme.colorScheme.secondary;
+                                } else if (status == 'ended') {
+                                  bgColor = theme.colorScheme.error.withValues(alpha: 0.2);
+                                  textColor = theme.colorScheme.error;
+                                } else {
+                                  bgColor = theme.colorScheme.onSurface.withValues(alpha: 0.1);
+                                  textColor = theme.colorScheme.onSurface.withValues(alpha: 0.6);
+                                }
+                                
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: bgColor,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Text(
+                                    status,
+                                    style: theme.textTheme.labelMedium?.copyWith(
+                                      color: textColor,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                             const Spacer(),
                             if (timetable == null)
@@ -1149,7 +1417,7 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                                 padding: const EdgeInsets.only(right: 12),
                                 child: Text('Set timetable to enable auto-start', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
                               ),
-                            if (timetable != null && !hasStarted)
+                            if (timetable != null && windowStart != null && now.isBefore(windowStart))
                               TextButton(
                                 onPressed: () async {
                                   final session = QuizSession(
@@ -1164,29 +1432,66 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                                 },
                                 child: const Text('Start now'),
                               ),
-                            if (isOngoing)
-                              TextButton(
-                                onPressed: () async {
-                                  final latest = await _dataService.getLatestSessionForQuiz(quiz.id);
-                                  if (latest != null) {
-                                    await _dataService.updateQuizSessionFields(latest.id, {
-                                      'end_time': DateTime.now(),
-                                      'status': 'ended',
-                                    });
-                                  }
-                                  await _dataService.updateQuizFields(quiz.id, {'is_paused': true});
-                                  if (mounted) setState(() {});
-                                },
-                                child: const Text('End now'),
-                              ),
-                            if (quiz.isActive && quiz.attendanceUploaded)
-                              TextButton(
-                                onPressed: () async {
-                                  await _dataService.updateQuizFields(quiz.id, {'is_paused': !quiz.isPaused});
-                                  if (mounted) setState(() {});
-                                },
-                                child: Text(quiz.isPaused ? 'Resume' : 'Pause'),
-                              ),
+                            FutureBuilder<QuizSession?>(
+                              future: _dataService.getLatestSessionForQuiz(quiz.id),
+                              builder: (context, latestSnap) {
+                                final session = latestSnap.data;
+                                final status = session?.status ?? 'none';
+                                final ended = session != null && (status == 'ended' || DateTime.now().isAfter(session.endTime));
+                                if (ended) return const SizedBox.shrink();
+                                return Row(
+                                  children: [
+                                    if (status == 'running')
+                                      TextButton(
+                                        onPressed: () async {
+                                          final latest = await _dataService.getLatestSessionForQuiz(quiz.id);
+                                          if (latest != null) {
+                                            final nowP = DateTime.now();
+                                            final remaining = latest.endTime.difference(nowP);
+                                            final remainingMs = remaining.inMilliseconds.clamp(0, quiz.duration * 60 * 1000);
+                                            await _dataService.updateQuizSessionFields(latest.id, {
+                                              'status': 'paused',
+                                              'remaining_ms': remainingMs,
+                                              'paused_at': nowP,
+                                            });
+                                            await _dataService.updateQuizFields(quiz.id, {'is_paused': true});
+                                            if (mounted) setState(() {});
+                                          }
+                                        },
+                                        child: const Text('Pause'),
+                                      ),
+                                    if (status == 'paused')
+                                      TextButton(
+                                        onPressed: () async {
+                                          final latest = await _dataService.getLatestSessionForQuiz(quiz.id);
+                                          if (latest != null) {
+                                            final remainingMs = latest.remainingMs ?? (quiz.duration * 60 * 1000);
+                                            final newEnd = DateTime.now().add(Duration(milliseconds: remainingMs));
+                                            await _dataService.updateQuizSessionFields(latest.id, {
+                                              'status': 'running',
+                                              'end_time': newEnd,
+                                              'paused_at': null,
+                                            });
+                                            await _dataService.updateQuizFields(quiz.id, {'is_paused': false});
+                                            if (mounted) setState(() {});
+                                          }
+                                        },
+                                        child: const Text('Unpause'),
+                                      ),
+                                    if (status == 'running' || status == 'paused')
+                                      ElevatedButton.icon(
+                                        onPressed: () => _showStopQuizConfirmation(quiz),
+                                        icon: Icon(Icons.stop, color: theme.colorScheme.onError),
+                                        label: Text('Stop Quiz', style: TextStyle(color: theme.colorScheme.onError)),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: theme.colorScheme.error,
+                                          foregroundColor: theme.colorScheme.onError,
+                                        ),
+                                      ),
+                                  ],
+                                );
+                              },
+                            ),
                             if (submissions.isNotEmpty)
                               TextButton(
                                 onPressed: () => Navigator.push(
@@ -1202,23 +1507,45 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                               ),
                           ],
                         ),
-                        if (isOngoing && autoStart != null && autoEnd != null) ...[
-                          const SizedBox(height: 8),
-                          LinearProgressIndicator(
-                            value: ((now.millisecondsSinceEpoch - autoStart.millisecondsSinceEpoch) /
-                                    (autoEnd.millisecondsSinceEpoch - autoStart.millisecondsSinceEpoch))
-                                .clamp(0.0, 1.0),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Time left: ' +
-                                Duration(milliseconds: (autoEnd.millisecondsSinceEpoch - now.millisecondsSinceEpoch).clamp(0, 7 * 60 * 1000))
-                                    .toString()
-                                    .split('.')
-                                    .first,
-                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface.withValues(alpha: 0.7)),
-                          ),
-                        ],
+                        FutureBuilder<String>(
+                          future: _computeQuizTemporalStatus(quiz),
+                          builder: (context, statusSnapshot) {
+                            final status = statusSnapshot.data ?? 'upcoming';
+                            // Only show timer if quiz is actually ongoing (not stopped)
+                            if (status == 'ongoing' && windowStart != null && !quiz.isPaused) {
+                              return StreamBuilder<int>(
+                                stream: Stream.periodic(const Duration(seconds: 1), (i) => i),
+                                builder: (context, _) {
+                                  final nowTick = DateTime.now();
+                                  final start = windowStart!.add(const Duration(minutes: 3));
+                                  final end = start.add(Duration(minutes: quiz.duration));
+                                  final totalMs = (end.millisecondsSinceEpoch - start.millisecondsSinceEpoch).toDouble();
+                                  final elapsedMs = (nowTick.millisecondsSinceEpoch - start.millisecondsSinceEpoch).toDouble();
+                                  final progress = (elapsedMs / totalMs).clamp(0.0, 1.0);
+                                  final remaining = end.difference(nowTick);
+                                  final display = remaining.isNegative
+                                      ? '00:00:00'
+                                      : remaining.toString().split('.').first;
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 8),
+                                      LinearProgressIndicator(value: progress),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Time left: $display',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              );
+                            }
+                            return const SizedBox.shrink(); // Hide timer when not ongoing
+                          },
+                        ),
                       ],
                     ),
                   ),
@@ -1226,6 +1553,95 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
               },
             );
           },
+        );
+      },
+    );
+  }
+
+  int _weekdayNumber(String day) {
+    switch (day.toLowerCase()) {
+      case 'monday': return 1;
+      case 'tuesday': return 2;
+      case 'wednesday': return 3;
+      case 'thursday': return 4;
+      case 'friday': return 5;
+      case 'saturday': return 6;
+      case 'sunday': return 7;
+      default: return DateTime.now().weekday;
+    }
+  }
+
+  // Computes a unified temporal status for a quiz: 'ongoing' | 'upcoming' | 'ended'.
+  // This avoids relying on quiz.status which mixes lifecycle flags (e.g., attendance pending).
+  Future<String> _computeQuizTemporalStatus(Quiz quiz) async {
+    final now = DateTime.now();
+    
+    // First, check the latest session status - this takes priority
+    final latest = await _dataService.getLatestSessionForQuiz(quiz.id);
+    if (latest != null) {
+      // If session is explicitly ended, quiz is ended regardless of time
+      if (latest.status == 'ended') return 'ended';
+      // If session is paused, the quiz is not ongoing
+      if (latest.status == 'paused') return 'upcoming';
+      // If session is running and time hasn't expired, it's ongoing
+      if (latest.status == 'running' && now.isBefore(latest.endTime)) return 'ongoing';
+      // If session time has expired, it's ended
+      if (now.isAfter(latest.endTime)) return 'ended';
+    }
+
+    // Check if quiz is manually deactivated
+    if (!quiz.isActive || quiz.isCancelled) return 'ended';
+    
+    // Fallback to timetable-based computation
+    final timetable = await _getTimetableForQuiz(quiz);
+    if (timetable != null) {
+      final int targetWeekday = _weekdayNumber(timetable.dayOfWeek);
+      final int addDays = (targetWeekday - now.weekday) % 7;
+      DateTime start = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        timetable.startTime.hour,
+        timetable.startTime.minute,
+      ).add(Duration(days: addDays));
+      start = start.add(const Duration(minutes: 3));
+      DateTime end = start.add(Duration(minutes: quiz.duration));
+      if (addDays == 0 && now.isAfter(end)) {
+        start = start.add(const Duration(days: 7));
+        end = end.add(const Duration(days: 7));
+      }
+      final bool isOngoing = now.isAfter(start) && now.isBefore(end) && !quiz.isPaused && !quiz.isCancelled;
+      if (isOngoing) return 'ongoing';
+      if (now.isAfter(end)) return 'ended';
+      return 'upcoming';
+    }
+
+    return 'upcoming';
+  }
+
+  Widget _buildEndsInCountdown(DateTime endAt, ThemeData theme) {
+    return StreamBuilder<int>(
+      stream: Stream.periodic(const Duration(seconds: 1), (i) => i),
+      builder: (context, snapshot) {
+        final now = DateTime.now();
+        if (!now.isBefore(endAt)) {
+          return Row(
+            children: [
+              Icon(Icons.check_circle, size: 16, color: theme.colorScheme.tertiary),
+              const SizedBox(width: 6),
+              Text('Ended', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.tertiary)),
+            ],
+          );
+        }
+        final remaining = endAt.difference(now);
+        final mm = remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
+        final ss = (remaining.inSeconds.remainder(60)).toString().padLeft(2, '0');
+        return Row(
+          children: [
+            Icon(Icons.timer, size: 16, color: theme.colorScheme.primary),
+            const SizedBox(width: 6),
+            Text('Ends in $mm:$ss', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.w600)),
+          ],
         );
       },
     );
@@ -1659,6 +2075,113 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
   }
 
 
+
+  void _showStopQuizConfirmation(Quiz quiz) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Theme.of(context).colorScheme.error),
+            const SizedBox(width: 8),
+            const Text('Stop Quiz'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Are you sure you want to stop "${quiz.quizTitle}" immediately?'),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, size: 16, color: Theme.of(context).colorScheme.onErrorContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This will immediately end the quiz for all students and they will not be able to continue.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _stopQuizImmediately(quiz);
+            },
+            icon: const Icon(Icons.stop),
+            label: const Text('Stop Quiz'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _stopQuizImmediately(Quiz quiz) async {
+    try {
+      // Get the latest session and end it
+      final latest = await _dataService.getLatestSessionForQuiz(quiz.id);
+      if (latest != null) {
+        await _dataService.updateQuizSessionFields(latest.id, {
+          'status': 'ended',
+          'end_time': DateTime.now(),
+        });
+      }
+
+      // Update quiz status
+      await _dataService.updateQuizFields(quiz.id, {
+        'is_paused': false,
+        'is_active': false,
+      });
+
+      // Show success message and force UI refresh
+      if (mounted) {
+        setState(() {}); // Force immediate UI refresh
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Quiz "${quiz.quizTitle}" has been stopped successfully'),
+            backgroundColor: Theme.of(context).colorScheme.tertiary,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        // Additional refresh after a brief delay to ensure all FutureBuilders rebuild
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) setState(() {});
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to stop quiz: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
 
   void _showLogoutDialog(BuildContext context) {
     showDialog(

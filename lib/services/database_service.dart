@@ -1,6 +1,8 @@
 // lib/services/database_service.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import '../models/user.dart';
 import '../models/course.dart';
 import '../models/quiz.dart';
@@ -16,7 +18,11 @@ class DatabaseService {
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-
+  String _hashPassword(String password) {
+    final bytes = utf8.encode(password);
+    final digest = sha256.convert(bytes);
+    return digest.toString();
+  }
 
   // Authentication
   Future<User?> authenticate(String identifier, UserRole role) async {
@@ -99,6 +105,25 @@ class DatabaseService {
     }
   }
 
+  Future<User?> getUserByRegistrationNumber(String registrationNumber, {UserRole? role}) async {
+    try {
+      Query<Map<String, dynamic>> query = _db
+          .collection(Collections.users)
+          .where('registration_number', isEqualTo: registrationNumber);
+      if (role != null) {
+        query = query.where('role', isEqualTo: role.name);
+      }
+      final snapshot = await query.limit(1).get();
+      if (snapshot.docs.isEmpty) return null;
+      final data = snapshot.docs.first.data();
+      data['id'] = snapshot.docs.first.id;
+      return User.fromJson(data);
+    } catch (e) {
+      print('Get user by registration number error: $e');
+      return null;
+    }
+  }
+
   Future<Faculty?> getFacultyByUserId(String userId) async {
     try {
       final query = _db.collection(Collections.faculty)
@@ -171,6 +196,20 @@ class DatabaseService {
     }
   }
 
+  Future<List<Course>> getAllCourses() async {
+    try {
+      final snapshot = await _db.collection(Collections.courses).get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return Course.fromJson(data);
+      }).toList();
+    } catch (e) {
+      print('Get all courses error: $e');
+      return [];
+    }
+  }
+
   Future<List<Course>> getCoursesByStudent(String studentId) async {
     try {
       // Get enrollments for student
@@ -234,21 +273,24 @@ class DatabaseService {
       // Get student's courses
       final courses = await getCoursesByStudent(studentId);
       if (courses.isEmpty) return [];
-      
       final courseIds = courses.map((c) => c.id).toList();
-      
-      // Get active quizzes for these courses
+
+      // Firestore often requires a composite index when mixing whereIn + orderBy.
+      // To avoid runtime index errors, fetch without orderBy and sort in-memory.
       final query = _db.collection(Collections.quizzes)
           .where('course_id', whereIn: courseIds)
-          .where('status', isEqualTo: 'active')
-          .orderBy('scheduled_at', descending: true);
-      
+          .where('is_active', isEqualTo: true)
+          .where('is_cancelled', isEqualTo: false);
+
       final snapshot = await query.get();
-      return snapshot.docs.map((doc) {
+      final quizzes = snapshot.docs.map((doc) {
         final data = doc.data();
         data['id'] = doc.id;
         return Quiz.fromJson(data);
       }).toList();
+
+      quizzes.sort((a, b) => (b.scheduledAt ?? b.createdAt).compareTo(a.scheduledAt ?? a.createdAt));
+      return quizzes;
     } catch (e) {
       print('Get active quizzes error: $e');
       return [];
@@ -993,5 +1035,204 @@ class DatabaseService {
       print('Delete course error: $e');
       return false;
     }
+  }
+
+  // Enrollment methods
+  Future<bool> createEnrollment({required String studentUserId, required String courseId}) async {
+    try {
+      // Avoid duplicates
+      final existing = await _db
+          .collection(Collections.enrollments)
+          .where('student_id', isEqualTo: studentUserId)
+          .where('course_id', isEqualTo: courseId)
+          .limit(1)
+          .get();
+      if (existing.docs.isNotEmpty) {
+        return true; // already enrolled
+      }
+
+      await _db.collection(Collections.enrollments).add({
+        'student_id': studentUserId,
+        'course_id': courseId,
+        'is_active': true,
+        'created_at': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      print('Create enrollment error: $e');
+      return false;
+    }
+  }
+
+  Future<int> bulkEnrollStudentsByRegistrationNumbers({
+    required String courseId,
+    required List<String> registrationNumbers,
+  }) async {
+    int enrolledCount = 0;
+    for (final reg in registrationNumbers) {
+      final normalized = reg.trim();
+      if (normalized.isEmpty) continue;
+      final user = await getUserByRegistrationNumber(normalized, role: UserRole.student);
+      if (user == null) continue;
+      final ok = await createEnrollment(studentUserId: user.id, courseId: courseId);
+      if (ok) enrolledCount++;
+    }
+    return enrolledCount;
+  }
+
+  // TESTING ONLY: Mark all students as present/eligible for all their enrollments.
+  // Creates or updates an attendance document per (student_id, course_id) pair.
+  Future<int> markAllStudentsPresentForTesting() async {
+    int updated = 0;
+    try {
+      final enrollments = await _db.collection(Collections.enrollments).get();
+      final now = DateTime.now();
+      for (final e in enrollments.docs) {
+        final data = e.data();
+        final String studentId = data['student_id'];
+        final String courseId = data['course_id'];
+
+        // Try to find an existing attendance record for this student+course
+        final existing = await _db
+            .collection(Collections.attendance)
+            .where('student_id', isEqualTo: studentId)
+            .where('course_id', isEqualTo: courseId)
+            .limit(1)
+            .get();
+
+        final payload = {
+          'student_id': studentId,
+          'course_id': courseId,
+          'status': 'present',
+          'biometric_verified': true,
+          'is_eligible_for_quiz': true,
+          'attendance_date': now,
+          'marked_at': now,
+        };
+
+        if (existing.docs.isNotEmpty) {
+          await _db.collection(Collections.attendance).doc(existing.docs.first.id).set(payload, SetOptions(merge: true));
+        } else {
+          await _db.collection(Collections.attendance).add(payload);
+        }
+        updated++;
+      }
+    } catch (e) {
+      print('markAllStudentsPresentForTesting error: $e');
+    }
+    return updated;
+  }
+
+  // Ensure a student user/profile exists for the given registration number.
+  // Returns the userId if successful.
+  Future<String?> ensureStudentForRegistrationNumber({
+    required String registrationNumber,
+    required String programId,
+    required String departmentId,
+    String? name,
+    String? email,
+    int? yearOfStudy,
+  }) async {
+    try {
+      // 1) Ensure user exists
+      User? user = await getUserByRegistrationNumber(registrationNumber, role: UserRole.student);
+      if (user == null) {
+        final passwordHash = _hashPassword(registrationNumber);
+        final createdUser = await createUser(
+          registrationNumber: registrationNumber,
+          passwordHash: passwordHash,
+          role: UserRole.student,
+          status: UserStatus.active,
+        );
+        if (createdUser == null) return null;
+        user = createdUser;
+      }
+
+      // 2) Ensure student profile exists
+      final existingStudent = await getStudentByUserId(user.id);
+      if (existingStudent == null) {
+        String firstName = 'Student';
+        String lastName = registrationNumber;
+        if (name != null && name.trim().isNotEmpty) {
+          final parts = name.trim().split(RegExp(r"\s+"));
+          firstName = parts.first;
+          lastName = parts.length > 1 ? parts.sublist(1).join(' ') : '';
+        }
+        final studentEmail = (email != null && email.trim().isNotEmpty)
+            ? email.trim()
+            : '${registrationNumber.toLowerCase()}@student.example.edu';
+        final createdStudent = await createStudent(
+          userId: user.id,
+          firstName: firstName,
+          lastName: lastName,
+          departmentId: departmentId,
+          programId: programId,
+          yearOfStudy: yearOfStudy ?? 1,
+          email: studentEmail,
+        );
+        if (createdStudent == null) return null;
+      }
+
+      return user.id;
+    } catch (e) {
+      print('ensureStudentForRegistrationNumber error: $e');
+      return null;
+    }
+  }
+
+  // Rebuild students collection by scanning each course roster.
+  // For each row, ensure user+student profile and create the enrollment.
+  Future<Map<String, int>> rebuildStudentsFromCourses() async {
+    int ensured = 0;
+    int enrolled = 0;
+    try {
+      final courses = await getAllCourses();
+      for (final course in courses) {
+        // Prefer the structured roster; fallback to enrolled_students reg numbers
+        final List<Map<String, dynamic>> roster = course.roster;
+        final regNumbers = <String>{};
+        if (roster.isNotEmpty) {
+          for (final row in roster) {
+            final reg = (row['REGISTER NO'] ?? row['REG NO'] ?? row['REG'] ?? '').toString().trim();
+            if (reg.isEmpty) continue;
+            final name = (row['NAME'] ?? '').toString();
+            final email = (row['EMAIL'] ?? '').toString();
+            final userId = await ensureStudentForRegistrationNumber(
+              registrationNumber: reg,
+              programId: course.programId,
+              departmentId: course.department,
+              name: name,
+              email: email,
+            );
+            if (userId != null) {
+              ensured++;
+              final ok = await createEnrollment(studentUserId: userId, courseId: course.id);
+              if (ok) enrolled++;
+            }
+            regNumbers.add(reg);
+          }
+        }
+        // Also handle/enforce enrollment for any raw registration numbers
+        if (course.enrolledStudents.isNotEmpty) {
+          for (final reg in course.enrolledStudents) {
+            final normalized = reg.trim();
+            if (normalized.isEmpty || regNumbers.contains(normalized)) continue;
+            final userId = await ensureStudentForRegistrationNumber(
+              registrationNumber: normalized,
+              programId: course.programId,
+              departmentId: course.department,
+            );
+            if (userId != null) {
+              ensured++;
+              final ok = await createEnrollment(studentUserId: userId, courseId: course.id);
+              if (ok) enrolled++;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('rebuildStudentsFromCourses error: $e');
+    }
+    return {'ensured': ensured, 'enrolled': enrolled};
   }
 } 

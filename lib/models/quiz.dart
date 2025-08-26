@@ -240,6 +240,8 @@ class QuizSession {
   final DateTime startTime;
   final DateTime endTime;
   final String status;
+  final int? remainingMs; // remaining duration when paused
+  final DateTime? pausedAt;
 
   QuizSession({
     required this.id,
@@ -247,6 +249,8 @@ class QuizSession {
     required this.startTime,
     required this.endTime,
     required this.status,
+    this.remainingMs,
+    this.pausedAt,
   });
 
   factory QuizSession.fromJson(Map<String, dynamic> json) {
@@ -260,6 +264,10 @@ class QuizSession {
         ? (json['end_time'] as Timestamp).toDate()
         : DateTime.parse(json['end_time']),
       status: json['status'],
+      remainingMs: json['remaining_ms'],
+      pausedAt: json['paused_at'] is Timestamp
+          ? (json['paused_at'] as Timestamp).toDate()
+          : (json['paused_at'] != null ? DateTime.parse(json['paused_at']) : null),
     );
   }
 
@@ -269,6 +277,8 @@ class QuizSession {
         'start_time': startTime,
         'end_time': endTime,
         'status': status,
+        if (remainingMs != null) 'remaining_ms': remainingMs,
+        if (pausedAt != null) 'paused_at': pausedAt,
       };
 }
 

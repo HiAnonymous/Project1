@@ -5,6 +5,8 @@ import 'package:insightquill/services/database_service.dart';
 import 'package:insightquill/models/course.dart';
 import 'package:insightquill/models/quiz.dart';
 import 'package:insightquill/models/question.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:excel/excel.dart' as excel_pkg;
 // Attendance upload removed from this screen
 
 
@@ -234,7 +236,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '• Quiz will have exactly 5 questions\n• Duration: 7 minutes\n• Auto-starts 35 minutes after class begins\n• Only available to present students',
+                    '• Quiz will have exactly 5 questions\n• Duration: 7 minutes\n• Auto-starts 3 minutes after class begins\n• Only available to present students',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurface.withAlpha(175),
                     ),
@@ -262,19 +264,36 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            if (_questions.length < 5)
-              ElevatedButton.icon(
-                onPressed: () => _showAddQuestionDialog(theme),
-                icon: Icon(Icons.add, color: theme.colorScheme.onPrimary),
-                label: Text(
-                  'Add Question',
-                  style: TextStyle(color: theme.colorScheme.onPrimary),
+            Row(
+              children: [
+                ElevatedButton.icon(
+                  onPressed: _uploadQuestionsFromExcel,
+                  icon: Icon(Icons.upload_file, color: theme.colorScheme.onPrimary),
+                  label: Text(
+                    'Upload from Excel',
+                    style: TextStyle(color: theme.colorScheme.onPrimary),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.colorScheme.secondary,
+                    foregroundColor: theme.colorScheme.onSecondary,
+                  ),
                 ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: theme.colorScheme.onPrimary,
-                ),
-              ),
+                const SizedBox(width: 8),
+                if (_questions.length < 5)
+                  ElevatedButton.icon(
+                    onPressed: () => _showAddQuestionDialog(theme),
+                    icon: Icon(Icons.add, color: theme.colorScheme.onPrimary),
+                    label: Text(
+                      'Add Question',
+                      style: TextStyle(color: theme.colorScheme.onPrimary),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                    ),
+                  ),
+              ],
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -299,6 +318,14 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                         color: theme.colorScheme.onSurface.withAlpha(150),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Tip: Upload a 6-row x 5-column Excel sheet:\nRow 1: Questions (5 columns)\nRows 2-5: Options A–D per column\nRow 6: Correct option letter (A/B/C/D) per column.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withAlpha(150),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -312,6 +339,130 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
           }),
       ],
     );
+  }
+
+  Future<void> _uploadQuestionsFromExcel() async {
+    try {
+      final pick = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'xls'],
+        withData: true,
+      );
+      if (pick == null || pick.files.isEmpty) return;
+      final file = pick.files.single;
+      final bytes = file.bytes;
+      if (bytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to read selected file')),
+        );
+        return;
+      }
+
+      final book = excel_pkg.Excel.decodeBytes(bytes);
+      if (book.sheets.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Format not valid: no sheets found')),
+        );
+        return;
+      }
+      final sheet = book.sheets.values.first;
+
+      // Collect first 5 rows and 5 columns as strings
+      final rows = sheet.rows;
+            if (rows.length < 6) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Format not valid: requires 6 rows (questions, 4 options, correct letter)')),
+        );
+        return;
+      }
+ 
+      // Read a 6x5 window [0..5][0..4]
+      final List<List<String>> grid = List.generate(6, (r) => List.generate(5, (c) => ''));
+      for (int r = 0; r < 6; r++) {
+        final row = r < rows.length ? rows[r] : const <excel_pkg.Data?>[];
+        for (int c = 0; c < 5; c++) {
+          final cell = c < row.length ? row[c] : null;
+          grid[r][c] = cell?.value?.toString().trim() ?? '';
+        }
+      }
+
+      // Validate: Row 1 (r=0) all 5 questions must be non-empty
+      final qRow = grid[0];
+      if (qRow.any((v) => v.isEmpty)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Format not valid: first row must contain 5 question texts')),
+        );
+        return;
+      }
+
+            // Validate: Rows 2-5 (r=1..4) options must be non-empty for each column
+      for (int c = 0; c < 5; c++) {
+        for (int r = 1; r < 5; r++) {
+          if (grid[r][c].isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Format not valid: missing option at row ${r + 1}, column ${c + 1}')),
+            );
+            return;
+          }
+        }
+      }
+ 
+      // Validate: Row 6 (r=5) must be A/B/C/D for each column
+      for (int c = 0; c < 5; c++) {
+        final letter = grid[5][c].toUpperCase();
+        if (!(letter == 'A' || letter == 'B' || letter == 'C' || letter == 'D')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Format not valid: row 6 must contain A/B/C/D, invalid at column ${c + 1}')),
+          );
+          return;
+        }
+      }
+ 
+      // Build questions
+      final List<Question> parsed = [];
+      final nowTs = DateTime.now().millisecondsSinceEpoch;
+      for (int c = 0; c < 5; c++) {
+        final questionText = grid[0][c];
+        final options = [grid[1][c], grid[2][c], grid[3][c], grid[4][c]];
+        final correctLetter = grid[5][c].toUpperCase();
+        final correctIndex = {'A': 0, 'B': 1, 'C': 2, 'D': 3}[correctLetter] ?? 0;
+        parsed.add(Question(
+          id: 'q${nowTs}_$c',
+          text: questionText,
+          options: options,
+          correctAnswer: correctIndex,
+          type: QuestionType.text,
+        ));
+      }
+
+      // Confirm if replacing existing questions
+      if (_questions.isNotEmpty) {
+        final replace = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Replace existing questions?'),
+            content: const Text('Uploading will replace current questions with the 5 questions from Excel.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Replace')),
+            ],
+          ),
+        );
+        if (replace != true) return;
+      }
+
+      setState(() {
+        _questions = parsed;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Questions loaded from Excel. Review and set correct answers if needed.')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to import Excel: $e')),
+      );
+    }
   }
 
   Widget _buildQuestionCard(Question question, int index, ThemeData theme) {
@@ -446,7 +597,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
                 _buildSummaryRow('Course', _selectedCourseLabel ?? 'Not selected', theme),
                 _buildSummaryRow('Questions', '${_questions.length}/5', theme),
                 _buildSummaryRow('Duration', '7 minutes', theme),
-                _buildSummaryRow('Auto-start', '35 minutes after class begins', theme),
+                _buildSummaryRow('Auto-start', '3 minutes after class begins', theme),
               ],
             ),
           ),
@@ -639,13 +790,35 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
       );
       return;
     }
-    final timetables = await _dataService.getTimetableByFaculty(faculty.id);
+    final timetables = await _dataService.getTimetablesByCourse(_selectedCourseId!);
     if (timetables.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No timetable found for this course')),
       );
       return;
     }
+
+    // Determine next occurrence of the course start and schedule 3 minutes after start
+    final now = DateTime.now();
+    final tt = timetables.first; // pick first entry for the course
+    int targetWeekday = () {
+      switch (tt.dayOfWeek.toLowerCase()) {
+        case 'monday': return 1;
+        case 'tuesday': return 2;
+        case 'wednesday': return 3;
+        case 'thursday': return 4;
+        case 'friday': return 5;
+        case 'saturday': return 6;
+        case 'sunday': return 7;
+        default: return now.weekday;
+      }
+    }();
+    int addDays = (targetWeekday - now.weekday) % 7;
+    DateTime nextStart = DateTime(now.year, now.month, now.day, tt.startTime.hour, tt.startTime.minute).add(Duration(days: addDays));
+    if (addDays == 0 && now.isAfter(nextStart)) {
+      nextStart = nextStart.add(const Duration(days: 7));
+    }
+    final scheduledAt = nextStart.add(const Duration(minutes: 3));
 
     final quiz = Quiz(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -654,7 +827,7 @@ class _QuizCreationPageState extends State<QuizCreationPage> {
       title: _titleController.text.trim(),
       questions: _questions,
       createdAt: DateTime.now(),
-      scheduledAt: DateTime.now().add(const Duration(minutes: 35)),
+      scheduledAt: scheduledAt,
       duration: 7,
       isActive: true,
       isCancelled: false,
